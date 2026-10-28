@@ -985,8 +985,9 @@ function renderStrip(): void {
 function renderTally(): void {
   const pvw = byId(scene.pvw);
   const pgm = byId(trans?.to ?? scene.pgm);
-  $('#cap-pvw').innerHTML = `<span class="tag">PVW</span><span class="mon__name" data-testid="pvw-name">${pvw ? esc(pvw.name) : 'ว่าง'}</span>`;
-  $('#cap-pgm').innerHTML = `<span class="tag">PGM</span><span class="mon__name" data-testid="pgm-name">${pgm ? esc(pgm.name) : 'ว่าง'}</span>`;
+  // the tally word sits under the picture, never over it, so graphics in the corners stay visible
+  $('#cap-pvw').innerHTML = `<span class="tag mon__tag mon__tag--pvw">PVW</span><span class="mon__name" data-testid="pvw-name">${pvw ? esc(pvw.name) : 'ว่าง'}</span>`;
+  $('#cap-pgm').innerHTML = `<span class="tag mon__tag mon__tag--pgm">PGM</span><span class="mon__name" data-testid="pgm-name">${pgm ? esc(pgm.name) : 'ว่าง'}</span>`;
   $('#mon-pgm').dataset.source = scene.pgm ?? '';
   $('#mon-pvw').dataset.source = scene.pvw ?? '';
   document.querySelectorAll<HTMLElement>('#strip .wm-card').forEach((el) => {

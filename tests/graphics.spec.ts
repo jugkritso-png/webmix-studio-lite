@@ -153,7 +153,15 @@ test('countdown timer runs, pauses and resets', async ({ page }) => {
 
 test('scoreboard buttons and title presets', async ({ page }) => {
   await page.goto('/');
+  await addTile(page, 'source', 'bars');
   await addTile(page, 'graphic', 'g-score');
+  // nothing sits on top of the pictures: the tally words live under the monitors
+  for (const id of ['#mon-pvw', '#mon-pgm']) {
+    expect(await page.locator(`${id} > *`).evaluateAll((els) => els.map((e) => e.tagName))).toEqual(['CANVAS']);
+  }
+  await expect(page.locator('#cap-pgm .mon__tag--pgm')).toHaveText('PGM');
+  // the scoreboard is drawn inside the title-safe corner, over the bars
+  await expect.poll(() => pgmPixel(page, 0.1, 0.1)).not.toEqual([191, 191, 191]);
   const plusA = insp(page).locator('[data-act="score"][data-team="A"][data-d="1"]');
   await plusA.click();
   await plusA.click();
@@ -169,7 +177,7 @@ test('scoreboard buttons and title presets', async ({ page }) => {
   await insp(page).locator('[data-prop="p:title"]').fill('คนอื่น');
   await insp(page).locator('[data-act="preset"]').first().click();
   await expect(insp(page).locator('[data-prop="p:title"]')).toHaveValue('สมชาย ใจดี');
-  await expect(cards(page).nth(1)).toContainText('สมชาย ใจดี');
+  await expect(cards(page).nth(2)).toContainText('สมชาย ใจดี');
 });
 
 test('ticker items and live data from a Google Sheet', async ({ page }) => {

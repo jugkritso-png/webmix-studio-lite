@@ -368,14 +368,15 @@ function drawTimer(ctx: CanvasRenderingContext2D, s: Source, W: number, H: numbe
 function drawScore(ctx: CanvasRenderingContext2D, s: Source, W: number, H: number): void {
   const p = s.props;
   const u = H / 720;
-  const x = 40 * u, rowH = 52 * u, nameW = 240 * u, scoreW = 72 * u, bar = 10 * u;
+  // inside the title-safe area (5 % in from the edges)
+  const x = 64 * u, top = 48 * u, rowH = 60 * u, nameW = 280 * u, scoreW = 84 * u, bar = 12 * u;
   const rows: [string, number, string][] = [
     [p.teamA, p.scoreA, p.colorA || tk('accent')],
     [p.teamB, p.scoreB, p.colorB || tk('pgm-fill')],
   ];
   ctx.textBaseline = 'middle';
   rows.forEach(([team, score, color], i) => {
-    const y = 40 * u + i * rowH;
+    const y = top + i * rowH;
     ctx.fillStyle = color;
     ctx.fillRect(x, y, bar, rowH);
     ctx.fillStyle = tk('panel');
@@ -384,21 +385,21 @@ function drawScore(ctx: CanvasRenderingContext2D, s: Source, W: number, H: numbe
     ctx.fillRect(x + bar + nameW, y, scoreW, rowH);
     ctx.fillStyle = tk('text');
     ctx.textAlign = 'left';
-    ctx.font = font(700, 26 * u);
+    ctx.font = font(700, 30 * u);
     ctx.fillText(team, x + bar + 16 * u, y + rowH / 2, nameW - 24 * u);
     ctx.textAlign = 'center';
-    ctx.font = font(700, 30 * u, 'font-mono');
+    ctx.font = font(700, 36 * u, 'font-mono');
     ctx.fillText(String(score), x + bar + nameW + scoreW / 2, y + rowH / 2);
   });
   if (p.period) {
-    const y = 40 * u + rowH * 2;
-    ctx.font = font(600, 22 * u);
-    const pw = ctx.measureText(p.period).width + 24 * u;
+    const y = top + rowH * 2;
+    ctx.font = font(600, 26 * u);
+    const pw = ctx.measureText(p.period).width + 28 * u;
     ctx.fillStyle = tk('amber');
-    ctx.fillRect(x, y, pw, 36 * u);
+    ctx.fillRect(x, y, pw, 42 * u);
     ctx.fillStyle = tk('on-amber');
     ctx.textAlign = 'left';
-    ctx.fillText(p.period, x + 12 * u, y + 18 * u);
+    ctx.fillText(p.period, x + 14 * u, y + 21 * u);
   }
 }
 
