@@ -19,6 +19,8 @@ export interface Overlay {
   on: boolean;
   fx: OverlayFx;
   dur: number;
+  /** show it on Preview while it is off air, to check it before taking it */
+  cue: boolean;
 }
 
 export interface Props {
@@ -139,7 +141,7 @@ export function defaultProps(): Props {
 }
 
 export function emptyOverlays(): Overlay[] {
-  return Array.from({ length: OVERLAY_COUNT }, () => ({ src: null, on: false, fx: 'fade' as OverlayFx, dur: 400 }));
+  return Array.from({ length: OVERLAY_COUNT }, () => ({ src: null, on: false, fx: 'fade' as OverlayFx, dur: 400, cue: false }));
 }
 
 export function defaultScene(): Scene {

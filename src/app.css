@@ -107,7 +107,8 @@ button, input { font: inherit; color: inherit; }
 .ovl-row .tag { margin-right: var(--space-1); }
 .ovl-btn { width: var(--control-sm); height: var(--control-sm); border-radius: var(--radius-xs); border: 1px solid var(--line-2); background: var(--panel-2); color: var(--text); font: 700 12px/16px var(--font-mono); cursor: pointer; }
 .ovl-btn:hover:not([disabled]) { background: var(--panel-3); border-color: var(--line-strong); }
-.ovl-btn[disabled] { color: var(--dim); background: var(--panel); cursor: not-allowed; }
+.ovl-btn.is-empty { color: var(--dim-aa); background: var(--panel); border-style: dashed; }
+.ovl-btn.is-cued { border-color: var(--pvw); color: var(--pvw); }
 .ovl-btn[aria-pressed="true"] { background: var(--pgm-fill); border-color: var(--pgm); color: var(--on-accent); }
 .ovl-btn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .tbar { display: flex; align-items: center; gap: var(--space-3); width: min(100%, 420px); color: var(--muted); }

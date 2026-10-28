@@ -94,6 +94,19 @@ function setOverlay(i: number, on: boolean): void {
   if (ui.selected === o.src) renderInspector();
 }
 
+/** what Preview shows: everything on air plus channels cued for checking */
+function previewLayers(onAir: Layer[]): Layer[] {
+  const out: Layer[] = [];
+  for (const o of scene.overlays) {
+    const source = byId(o.src);
+    if (!source) continue;
+    const live = onAir.find((l) => l.source.id === source.id);
+    if (live) out.push(live);
+    else if (o.cue) out.push({ source, fx: 'cut', e: 1 });
+  }
+  return out;
+}
+
 function layers(now: number): Layer[] {
   const out: Layer[] = [];
   scene.overlays.forEach((o, i) => {
@@ -527,8 +540,8 @@ function renderOverlayRow(): void {
   if (!row) return;
   row.innerHTML = `<span class="tag">OVL</span>${scene.overlays.map((o, i) => {
     const src = byId(o.src);
-    return `<button type="button" class="ovl-btn" data-act="ovl" data-i="${i}" aria-pressed="${o.on}" ${src ? '' : 'disabled'}
-      title="${src ? `${esc(src.name)} · Shift+${i + 1}` : `Overlay ${i + 1} ว่าง`}" aria-label="Overlay ${i + 1}${src ? ` ${esc(src.name)}` : ' ว่าง'}">${i + 1}</button>`;
+    return `<button type="button" class="ovl-btn${src ? '' : ' is-empty'}${o.cue && !o.on ? ' is-cued' : ''}" data-act="ovl" data-i="${i}" aria-pressed="${o.on}"
+      title="${src ? `${esc(src.name)} · Shift+${i + 1}` : `Overlay ${i + 1} ว่าง แตะเพื่อเลือก`}" aria-label="Overlay ${i + 1}${src ? ` ${esc(src.name)}` : ' ว่าง เลือกสิ่งที่จะซ้อน'}">${i + 1}</button>`;
   }).join('')}`;
 }
 
@@ -579,11 +592,17 @@ function assignOverlay(id: string, ch?: number): void {
   mutate((sc) => {
     // the effect settings travel with the graphic
     const old = sc.overlays.find((o) => o.src === id);
-    const look = old ? { fx: old.fx, dur: old.dur } : {};
+    const look = old ? { fx: old.fx, dur: old.dur, cue: old.cue } : {};
     sc.overlays.forEach((o) => {
       if (o.src === id) Object.assign(o, { src: null, on: false });
     });
     sc.overlays[target] = { ...sc.overlays[target], ...look, src: id, on: false };
+    // a full-frame camera / video / image becomes a picture-in-picture instead of covering Program
+    const t = sc.sources.find((x) => x.id === id);
+    const p = t?.props;
+    if (t && p && !old && needsMedia(t.kind) && p.scale === 1 && p.x === 0 && p.y === 0 && !p.cropL && !p.cropR && !p.cropT && !p.cropB) {
+      Object.assign(p, { scale: 0.32, x: 0.58, y: 0.5, border: p.border || 4 });
+    }
   }, { toast: `ย้าย ${s.name} ไป Overlay ${target + 1} แล้ว` });
   mutateBusAfterOverlay(id);
 }
@@ -1020,6 +1039,7 @@ function overlayAdvanced(s: Source): string {
     <label class="wm-field"><span>เอฟเฟกต์เข้า-ออก</span><select class="wm-input" data-ovl="fx">${OVERLAY_FX.map(([v, l]) =>
       `<option value="${v}" ${v === o.fx ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
     ${rangeField('o:dur', 'ระยะเวลาเข้า-ออก', o.dur, 0, 2000, 1, 's', 100)}
+    ${switchRow('o:cue', 'แสดงบน PVW ก่อน (ยังไม่ออกอากาศ)', o.cue)}
     <button type="button" class="wm-btn wm-btn--sm" data-act="ovl-remove">เอาออกจาก Overlay</button>`;
 }
 
@@ -1365,6 +1385,26 @@ function openChooser(cat: Cat): void {
   }));
 }
 
+/** an empty overlay button: pick what goes on that channel, then take it */
+function openChannelChooser(ch: number): void {
+  const list = visuals().filter((s) => chOf(s.id) !== ch && !(s.kind === 'text' && s.props.style === 'slate'));
+  if (!list.length) return toast('เพิ่มกราฟิก ข้อความ หรือแหล่งภาพก่อน แล้วเลือกใส่ Overlay นี้');
+  const d = openDialog(`เลือกสิ่งที่จะซ้อนใน Overlay ${ch + 1}`, `<p class="wm-note">เลือกแล้วจะขึ้นจอทันที กดปุ่ม ${ch + 1} อีกครั้งเพื่อเอาลง · กล้องหรือวิดีโอเต็มจอจะย่อเป็นภาพซ้อนให้</p>
+    <div class="chooser">${list.map((s) => {
+      const cur = chOf(s.id);
+      return `<button type="button" class="wm-btn wm-btn--lg" data-pick="${s.id}">${icon(s.kind === 'text' ? 'text' : needsMedia(s.kind) ? 'source' : 'graphic')}${esc(s.name)}${cur >= 0 ? `<span class="tag">OVL ${cur + 1}</span>` : ''}</button>`;
+    }).join('')}</div>`,
+  '<button class="wm-btn" value="close">ปิด</button>');
+  d.querySelectorAll<HTMLElement>('[data-pick]').forEach((b) => b.addEventListener('click', () => {
+    d.close();
+    const id = b.dataset.pick!;
+    assignOverlay(id, ch);
+    setOverlay(ch, true);
+    select(id);
+    renderInspector();
+  }));
+}
+
 function openPipChooser(): void {
   const list = visuals().filter((s) => !isGraphic(s.id) && needsMedia(s.kind));
   if (!list.length) return toast('เพิ่มกล้อง หน้าจอ หรือวิดีโอก่อน แล้วเลือกเป็นภาพซ้อน');
@@ -1668,7 +1708,7 @@ function frame(now: number): void {
   lastFrame = now;
   const ls = layers(now);
   drawBus(pgmCtx, scene, scene.pgm, trans, now, ftb.level, ls);
-  drawBus(pvwCtx, scene, scene.pvw, null, now, 0, ls);
+  drawBus(pvwCtx, scene, scene.pvw, null, now, 0, previewLayers(ls));
   updateAudio(scene, onAir);
   paintWindows(pgmCtx.canvas, pvwCtx.canvas, scene, now);
 
@@ -1806,6 +1846,7 @@ const actions: Record<string, (el: HTMLElement, e: MouseEvent) => void> = {
   ftb: toggleFtb,
   ovl: (el) => {
     const i = Number(el.dataset.i);
+    if (!scene.overlays[i].src) return openChannelChooser(i);
     setOverlay(i, !scene.overlays[i].on);
   },
   'ovl-assign': () => {
@@ -1999,7 +2040,7 @@ function mutateBusAfterOverlay(id: string): void {
   if (scene.pgm === id || scene.pvw === id) {
     const rest = visuals().filter((x) => !isGraphic(x.id));
     if (scene.pgm === id) scene.pgm = rest[0]?.id ?? null;
-    if (scene.pvw === id) scene.pvw = rest.find((x) => x.id !== scene.pgm)?.id ?? null;
+    if (scene.pvw === id || scene.pvw === scene.pgm) scene.pvw = rest.find((x) => x.id !== scene.pgm)?.id ?? null;
     changed(false);
   }
 }
@@ -2133,7 +2174,7 @@ document.addEventListener('keydown', (e) => {
   if (digit && e.shiftKey) {
     e.preventDefault();
     const i = Number(digit[1]) - 1;
-    if (!scene.overlays[i].src) return toast(`Overlay ${i + 1} ยังว่าง เลือกกราฟิกแล้วตั้งช่องในแผงขวา`);
+    if (!scene.overlays[i].src) return openChannelChooser(i);
     return setOverlay(i, !scene.overlays[i].on);
   }
   if (/^[1-9]$/.test(e.key)) {

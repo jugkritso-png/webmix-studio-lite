@@ -36,7 +36,7 @@ test('graphics land on overlay channels with in / out effects', async ({ page })
   await addTile(page, 'text', 't-l3');
   await expect(cards(page).nth(1)).toContainText('Overlay 1 · ออนแอร์');
   await expect(ovlBtn(page, 1)).toHaveAttribute('aria-pressed', 'true');
-  await expect(ovlBtn(page, 2)).toBeDisabled();
+  await expect(ovlBtn(page, 2)).toHaveClass(/is-empty/);
   await expect.poll(() => pgmPixel(page, 0.2, 0.8)).not.toEqual(bare);
 
   // Shift+1 takes it off, the bus stays on Color Bars
@@ -55,8 +55,8 @@ test('graphics land on overlay channels with in / out effects', async ({ page })
   await insp(page).locator('[data-act="advanced"]').click();
   await insp(page).locator('select[data-ovl="fx"]').selectOption('wipe');
   await insp(page).locator('select[data-ovl="ch"]').selectOption('2');
-  await expect(ovlBtn(page, 3)).toBeEnabled();
-  await expect(ovlBtn(page, 1)).toBeDisabled();
+  await expect(ovlBtn(page, 3)).not.toHaveClass(/is-empty/);
+  await expect(ovlBtn(page, 1)).toHaveClass(/is-empty/);
   await ovlBtn(page, 3).click();
   await expect(ovlBtn(page, 3)).toHaveAttribute('aria-pressed', 'true');
   const sceneOverlay = await page.evaluate(() => (window as unknown as { __webmix: { scene: { overlays: { fx: string; on: boolean }[] } } }).__webmix.scene.overlays[2]);
@@ -65,8 +65,42 @@ test('graphics land on overlay channels with in / out effects', async ({ page })
   // after a reload the graphic keeps its channel but stays off air
   await page.waitForTimeout(500);
   await page.reload();
-  await expect(ovlBtn(page, 3)).toBeEnabled();
+  await expect(ovlBtn(page, 3)).not.toHaveClass(/is-empty/);
   await expect(ovlBtn(page, 3)).toHaveAttribute('aria-pressed', 'false');
+});
+
+test('empty overlay button picks a source; a camera becomes a PIP; cue shows on PVW only', async ({ page }) => {
+  await page.goto('/');
+  await addTile(page, 'source', 'cam');
+  await addTile(page, 'source', 'bars');
+  await expect(pgmName(page)).toHaveText('กล้อง 1');
+  const pvwPixel = (fx: number, fy: number) => page.evaluate(([fx, fy]) => {
+    const c = document.querySelector<HTMLCanvasElement>('#cv-pvw')!;
+    return [...c.getContext('2d')!.getImageData(c.width * fx, c.height * fy, 1, 1).data.slice(0, 3)];
+  }, [fx, fy]);
+
+  // tap the empty Overlay 4 and choose the camera: it shrinks to a PIP, the buses move on
+  await ovlBtn(page, 4).click();
+  await expect(page.locator('#dlg')).toContainText('Overlay 4');
+  await page.locator('#dlg [data-pick]').filter({ hasText: 'กล้อง 1' }).click();
+  await expect(ovlBtn(page, 4)).toHaveAttribute('aria-pressed', 'true');
+  await expect(pgmName(page)).toHaveText('Color Bars');
+  await expect(page.getByTestId('pvw-name')).toHaveText('ว่าง');
+  const props = await page.evaluate(() => (window as unknown as { __webmix: { scene: { sources: { props: { scale: number; x: number } }[] } } }).__webmix.scene.sources[0].props);
+  expect(props).toMatchObject({ scale: 0.32, x: 0.58 });
+  // the bars still show around the PIP
+  await expect.poll(() => pgmPixel(page, 0.05, 0.3)).toEqual([191, 191, 191]);
+
+  // a lower third cued on PVW: visible in Preview, not on Program
+  await addTile(page, 'text', 't-l3');
+  await ovlBtn(page, 1).click();
+  await expect(ovlBtn(page, 1)).toHaveAttribute('aria-pressed', 'false');
+  const before = await pgmPixel(page, 0.12, 0.82);
+  await insp(page).locator('[data-act="advanced"]').click();
+  await insp(page).locator('[data-prop="o:cue"]').click();
+  await expect(ovlBtn(page, 1)).toHaveClass(/is-cued/);
+  await expect.poll(() => pvwPixel(0.12, 0.82)).not.toEqual([5, 7, 10]);
+  expect(await pgmPixel(page, 0.12, 0.82)).toEqual(before);
 });
 
 test('chroma key removes the green screen', async ({ page }) => {
