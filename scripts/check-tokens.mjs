@@ -7,6 +7,7 @@ const bad = [];
 for (const f of readdirSync('src')) {
   const text = readFileSync(join('src', f), 'utf8');
   text.split('\n').forEach((line, i) => {
+    if (line.includes('test-signal')) return; // broadcast test patterns (colour bars) are not design colours
     const hits = line.replace(/&#\$\{|`&#/g, '').match(RAW);
     if (hits) bad.push(`src/${f}:${i + 1}: ${hits.join(', ')}`);
   });

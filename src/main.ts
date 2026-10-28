@@ -3,14 +3,15 @@ import '../design/tokens.css';
 import './app.css';
 import { icon, logo, type IconName } from './icons';
 import {
-  clone, defaultProps, isVisual, loadScene, needsMedia, saveScene, uid,
-  type Kind, type Props, type Scene, type Source, type TextStyle,
+  clone, defaultProps, isVisual, loadScene, needsMedia, OUTPUT_SIZE, saveScene, uid,
+  type Kind, type Props, type Resolution, type Scene, type Source, type TextStyle,
 } from './scene';
 import {
   attachElementAudio, attachStreamAudio, audioForUrl, drawBus, drawSource, ensureAudio, imageFor,
   level, masterLevel, media, Recorder, release, tk, updateGains, videoForStream, videoForUrl,
-  type Media, type TransitionState,
+  transitionProgress, type Media, type TransitionState,
 } from './engine';
+import { multiviewOpen, openMultiview, openOutput, outputOpen, paintWindows } from './windows';
 
 /* ================= state ================= */
 
@@ -18,7 +19,7 @@ type Cat = 'source' | 'audio' | 'graphic' | 'text' | 'comment' | 'effect' | 'liv
 type Target = 'pvw' | 'pgm' | 'strip';
 
 const CATS: { id: Cat; label: string; icon: IconName; search: string; filters: string[]; add: string }[] = [
-  { id: 'source', label: 'แหล่งภาพ', icon: 'source', search: 'ค้นหากล้อง, หน้าจอ, ไฟล์', filters: ['ทั้งหมด', 'กล้อง', 'หน้าจอ', 'ไฟล์'], add: 'เพิ่มแหล่งภาพ' },
+  { id: 'source', label: 'แหล่งภาพ', icon: 'source', search: 'ค้นหากล้อง, หน้าจอ, ไฟล์', filters: ['ทั้งหมด', 'กล้อง', 'หน้าจอ', 'ไฟล์', 'สัญญาณ'], add: 'เพิ่มแหล่งภาพ' },
   { id: 'audio', label: 'เสียง', icon: 'audio', search: 'ค้นหาไมค์, ไฟล์เสียง', filters: ['ทั้งหมด', 'ไมค์', 'ไฟล์'], add: 'เพิ่มเสียง' },
   { id: 'graphic', label: 'กราฟิก', icon: 'graphic', search: 'ค้นหากราฟิก', filters: ['ทั้งหมด', 'ข้อความ', 'รูป'], add: 'เพิ่มรูปซ้อน' },
   { id: 'text', label: 'ข้อความ', icon: 'text', search: 'ค้นหาแบบข้อความ', filters: ['ทั้งหมด'], add: 'เพิ่มข้อความ' },
@@ -42,6 +43,10 @@ const ui = {
   mics: [] as MediaDeviceInfo[],
 };
 let trans: TransitionState | null = null;
+/** fade to black: target 0/1, level eases towards it */
+const ftb = { target: 0, level: 0 };
+/** T-Bar rests at 0 or 100; the next pull travels to the other end */
+let tbarBase = 0;
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string, root: ParentNode = document) => root.querySelector<T>(sel)!;
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -138,6 +143,18 @@ function pickFile(accept: string): Promise<File | null> {
   });
 }
 
+function pickFiles(accept: string): Promise<File[]> {
+  return new Promise((resolve) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = accept;
+    input.multiple = true;
+    input.addEventListener('change', () => resolve([...(input.files ?? [])]), { once: true });
+    input.addEventListener('cancel', () => resolve([]), { once: true });
+    input.click();
+  });
+}
+
 const readDataUrl = (f: File) => new Promise<string>((res, rej) => {
   const r = new FileReader();
   r.onload = () => res(String(r.result));
@@ -156,12 +173,18 @@ async function refreshDevices(): Promise<void> {
 
 interface Acquired { m: Media; meta: string; name?: string; dataUrl?: string }
 
-async function acquire(kind: Kind, deviceId?: string): Promise<Acquired | null> {
+const CAPTURE: Record<Resolution, { width: { ideal: number }; height: { ideal: number } }> = {
+  '720p': { width: { ideal: 1280 }, height: { ideal: 720 } },
+  '1080p': { width: { ideal: 1920 }, height: { ideal: 1080 } },
+  '2160p': { width: { ideal: 3840 }, height: { ideal: 2160 } },
+};
+
+async function acquire(kind: Kind, deviceId?: string, res: Resolution = '1080p'): Promise<Acquired | null> {
   const md = navigator.mediaDevices;
   switch (kind) {
     case 'camera': {
       if (!md?.getUserMedia) throw new DOMException('', 'NotSupportedError');
-      const size = { width: { ideal: 1280 }, height: { ideal: 720 } };
+      const size = CAPTURE[res];
       const stream = await md.getUserMedia({ video: deviceId ? { ...size, deviceId: { exact: deviceId } } : size, audio: false });
       const st = stream.getVideoTracks()[0]?.getSettings() ?? {};
       void refreshDevices();
@@ -192,6 +215,16 @@ async function acquire(kind: Kind, deviceId?: string): Promise<Acquired | null> 
       attachElementAudio(m, el);
       return { m, meta: f.name.split('.').pop()?.toUpperCase() ?? 'VIDEO', name: f.name };
     }
+    case 'playlist': {
+      const files = await pickFiles('video/*');
+      if (!files.length) return null;
+      const list = files.map((f) => ({ url: URL.createObjectURL(f), name: f.name }));
+      const el = videoForUrl(list[0].url);
+      el.loop = false;
+      const m: Media = { el, list, index: 0 };
+      attachElementAudio(m, el);
+      return { m, meta: `${list.length} ไฟล์` };
+    }
     case 'audio': {
       const f = await pickFile('audio/*');
       if (!f) return null;
@@ -212,7 +245,44 @@ async function acquire(kind: Kind, deviceId?: string): Promise<Acquired | null> 
   }
 }
 
-const WHAT: Partial<Record<Kind, string>> = { camera: 'กล้อง', screen: 'การแชร์หน้าจอ', mic: 'ไมโครโฟน', video: 'ไฟล์วิดีโอ', audio: 'ไฟล์เสียง', image: 'รูปภาพ' };
+const WHAT: Partial<Record<Kind, string>> = { camera: 'กล้อง', screen: 'การแชร์หน้าจอ', mic: 'ไมโครโฟน', video: 'ไฟล์วิดีโอ', playlist: 'เพลย์ลิสต์', audio: 'ไฟล์เสียง', image: 'รูปภาพ' };
+
+/** Wire file playback: loop flag, and playlists advancing to the next file. */
+function wirePlayback(id: string, m: Media): void {
+  const el = m.el;
+  if (!(el instanceof HTMLVideoElement)) return;
+  const s = byId(id);
+  el.loop = !m.list && (s?.props.loop ?? true);
+  el.addEventListener('ended', () => {
+    const src = byId(id);
+    if (!m.list || !src) return;
+    const next = (m.index ?? 0) + 1;
+    if (next >= m.list.length && !src.props.loop) return;
+    playlistGo(id, next % m.list.length);
+  });
+  el.addEventListener('timeupdate', () => {
+    if (ui.selected === id && ui.tab === 'เล่น') renderTransport();
+  });
+}
+
+function playlistGo(id: string, index: number): void {
+  const m = media.get(id);
+  if (!m?.list || !(m.el instanceof HTMLVideoElement)) return;
+  m.index = (index + m.list.length) % m.list.length;
+  m.el.src = m.list[m.index].url;
+  void m.el.play().catch(() => undefined);
+  if (ui.selected === id) renderInspector();
+}
+
+/** A file source that should start from the top when it is taken to air. */
+function goingOnAir(id: string | null): void {
+  const s = byId(id);
+  const el = id ? media.get(id)?.el : undefined;
+  if (!s?.props.restartOnAir || !(el instanceof HTMLVideoElement)) return;
+  if (s.kind === 'playlist') playlistGo(s.id, 0);
+  el.currentTime = 0;
+  void el.play().catch(() => undefined);
+}
 
 function ensureMedia(s: Source, auto: boolean): void {
   if (media.has(s.id)) return;
@@ -224,7 +294,7 @@ async function autoReconnect(s: Source): Promise<void> {
   try {
     const perm = await navigator.permissions?.query({ name: (s.kind === 'camera' ? 'camera' : 'microphone') as PermissionName });
     if (perm?.state !== 'granted') return;
-    const got = await acquire(s.kind, s.deviceId).catch(() => acquire(s.kind));
+    const got = await acquire(s.kind, s.deviceId, s.props.res).catch(() => acquire(s.kind, undefined, s.props.res));
     if (got && byId(s.id)) media.set(s.id, got.m);
   } catch { /* stays as a placeholder until the user reconnects */ }
 }
@@ -233,10 +303,11 @@ async function reconnect(id: string): Promise<void> {
   const s = byId(id);
   if (!s) return;
   try {
-    const got = await acquire(s.kind, s.deviceId).catch((e) => (s.deviceId ? acquire(s.kind) : Promise.reject(e)));
+    const got = await acquire(s.kind, s.deviceId, s.props.res).catch((e) => (s.deviceId ? acquire(s.kind, undefined, s.props.res) : Promise.reject(e)));
     if (!got) return;
     release(id);
     media.set(id, got.m);
+    wirePlayback(id, got.m);
     mutate((sc) => {
       const t = sc.sources.find((x) => x.id === id);
       if (t) {
@@ -263,7 +334,8 @@ async function addMedia(kind: Kind, label: string, target?: Target, deviceId?: s
     if (kind === 'video' || kind === 'audio' || kind === 'screen' || kind === 'mic') ensureAudio();
     const got = await acquire(kind, deviceId);
     if (!got) return;
-    const s = newSource(kind, got.name ?? `${label} ${countOf(kind)}`, got.meta, { afv: kind === 'video', ...extra });
+    const s = newSource(kind, got.name ?? `${label} ${countOf(kind)}`, got.meta, { afv: kind === 'video' || kind === 'playlist', ...extra });
+    wirePlayback(s.id, got.m);
     if (deviceId) s.deviceId = deviceId;
     if (got.dataUrl) s.dataUrl = got.dataUrl;
     if (kind === 'screen') {
@@ -315,23 +387,66 @@ function finishTransition(): void {
   scene.pgm = trans.to;
   scene.pvw = trans.from ?? trans.to;
   trans = null;
+  tbarBase = tbarValue() >= 50 ? 100 : 0;
   changed(false);
+  renderTbar();
 }
 
 function cut(): void {
   finishTransition();
   if (!scene.pvw || scene.pvw === scene.pgm) return;
   const old = scene.pgm;
+  goingOnAir(scene.pvw);
   scene.pgm = scene.pvw;
   scene.pvw = old ?? scene.pvw;
   changed(false);
 }
 
 function auto(): void {
+  const now = performance.now();
+  if (trans?.manual !== undefined) {
+    // AUTO while the T-Bar is half way: finish the move from where it is
+    trans.start = now - trans.manual * trans.dur;
+    trans.manual = undefined;
+    return;
+  }
   if (trans) return finishTransition();
   if (!scene.pvw || scene.pvw === scene.pgm) return;
-  trans = { from: scene.pgm, to: scene.pvw, start: performance.now(), dur: scene.duration, type: scene.transition };
+  goingOnAir(scene.pvw);
+  trans = { from: scene.pgm, to: scene.pvw, start: now, dur: scene.duration, type: scene.transition };
   renderTally();
+}
+
+const tbarValue = () => Number(document.querySelector<HTMLInputElement>('#tbar')?.value ?? 0);
+
+function onTbar(value: number): void {
+  const pos = Math.abs(value - tbarBase) / 100;
+  if (!trans) {
+    if (pos === 0 || !scene.pvw || scene.pvw === scene.pgm) return;
+    goingOnAir(scene.pvw);
+    trans = { from: scene.pgm, to: scene.pvw, start: performance.now(), dur: scene.duration, type: scene.transition, manual: pos };
+    renderTally();
+  } else if (trans.manual !== undefined) {
+    trans.manual = pos;
+  }
+  if (pos >= 1) {
+    finishTransition();
+  } else if (pos <= 0 && trans?.manual !== undefined) {
+    trans = null; // pulled back to where it started: nothing changes
+    renderTally();
+  }
+}
+
+function renderTbar(): void {
+  const t = document.querySelector<HTMLInputElement>('#tbar');
+  if (t && trans?.manual === undefined) t.value = String(tbarBase);
+}
+
+function toggleFtb(): void {
+  ftb.target = ftb.target ? 0 : 1;
+  renderChips();
+  renderTrans();
+  if (!ui.selected) renderInspector();
 }
 
 function toPreview(id: string): void {
@@ -370,6 +485,7 @@ function cutTo(id: string): void {
   if (!s) return;
   if (s.props.overlay) return toggleOverlay(id);
   if (scene.pgm === id) return;
+  trans = null;
   scene.pvw = id;
   cut();
 }
@@ -389,7 +505,7 @@ interface Tile {
 }
 
 const textSource = (style: TextStyle, title: string, sub: string, extra: Partial<Props> = {}) =>
-  newSource('text', title, { lower: 'Lower third', title: 'หัวเรื่อง', corner: 'ป้ายมุมจอ', comment: 'คอมเมนต์' }[style], { style, title, sub, overlay: true, ...extra });
+  newSource('text', title, { lower: 'Lower third', title: 'หัวเรื่อง', corner: 'ป้ายมุมจอ', comment: 'คอมเมนต์', slate: 'Slate' }[style], { style, title, sub, overlay: true, ...extra });
 
 const addText = (s: Source) => (target?: Target) => addSource({ ...s, id: uid(), props: { ...s.props } }, null, target);
 
@@ -413,10 +529,18 @@ function tilesFor(cat: Cat): Tile[] {
         })),
         { id: 'screen', name: 'แชร์หน้าจอ', badge: 'SCR', filter: 'หน้าจอ', ph: 'b', run: (t) => addMedia('screen', 'หน้าจอ', t) },
         { id: 'video', name: 'ไฟล์วิดีโอ', badge: 'MP4', filter: 'ไฟล์', ph: 'c', run: (t) => addMedia('video', 'วิดีโอ', t) },
+        { id: 'playlist', name: 'เพลย์ลิสต์วิดีโอ', badge: 'LIST', filter: 'ไฟล์', ph: 'c', run: (t) => addMedia('playlist', 'เพลย์ลิสต์', t) },
         { id: 'image', name: 'รูปภาพ', badge: 'IMG', filter: 'ไฟล์', ph: 'b', run: (t) => addMedia('image', 'รูปภาพ', t) },
         {
           id: 'color', name: 'พื้นสี', badge: 'CLR', filter: 'ไฟล์', ph: 'c',
           run: (t) => addSource(newSource('color', `พื้นสี ${countOf('color')}`, 'สีพื้น', { color: tk('accent-soft') }), null, t),
+        },
+        { id: 'bars', name: 'Color Bars', badge: 'BARS', filter: 'สัญญาณ', ph: 'c', run: (t) => addSource(newSource('bars', 'Color Bars', 'สัญญาณทดสอบ'), null, t) },
+        { id: 'slate', name: 'Slate ข้อความ', badge: 'SLT', filter: 'สัญญาณ', ph: 'b', run: (t) => addSource(textSource('slate', 'เริ่มรายการเร็ว ๆ นี้', 'โปรดรอสักครู่', { overlay: false, tone: 'panel' }), null, t) },
+        { id: 'clock', name: 'นาฬิกา', badge: 'CLK', filter: 'สัญญาณ', ph: 'a', run: (t) => addSource(newSource('clock', 'นาฬิกา', 'เวลาเครื่องนี้'), null, t) },
+        {
+          id: 'black', name: 'จอดำ', badge: 'BLK', filter: 'สัญญาณ', ph: 'a',
+          run: (t) => addSource(newSource('color', 'จอดำ', 'Black', { color: tk('card-ground') }), null, t),
         },
       ];
     case 'audio':
@@ -523,10 +647,13 @@ const fmtTime = (ms: number) => {
   return [Math.floor(s / 3600), Math.floor(s / 60) % 60, s % 60].map((n) => String(n).padStart(2, '0')).join(':');
 };
 
+const RES_LABEL: Record<Resolution, string> = { '720p': '720p', '1080p': '1080p', '2160p': '4K' };
+
 function renderChips(): void {
   const rec = ui.recorder;
   $('#chips').innerHTML = `
-    <span class="wm-chip chip-res">${scene.resolution} <b>30</b></span>
+    ${ftb.target ? '<span class="wm-chip wm-chip--warn" id="chip-ftb"><span class="wm-dot"></span>FTB จอดำ</span>'
+      : `<span class="wm-chip chip-res">${RES_LABEL[scene.resolution]} <b>${scene.fps}</b></span>`}
     <span class="wm-chip chip-audio" title="ระดับเสียงรวม">เสียง<span class="mini-meter"><i id="meter-master"></i></span></span>
     ${rec ? `<span class="wm-chip wm-chip--warn" id="chip-rec"><span class="wm-dot"></span>REC <b id="rec-time">${fmtTime(performance.now() - rec.started)}</b></span>` : ''}`;
   const btn = $('#btn-rec');
@@ -643,15 +770,17 @@ function renderTrans(): void {
   $('#trans').innerHTML = `
     <div class="trans__seg">
       <div class="wm-seg" role="group" aria-label="ทรานซิชัน">
-        <button type="button" data-act="trans" data-val="mix" aria-pressed="${scene.transition === 'mix'}">MIX</button>
-        <button type="button" data-act="trans" data-val="wipe" aria-pressed="${scene.transition === 'wipe'}">WIPE</button>
+        ${(['mix', 'dip', 'wipe'] as const).map((t) => `<button type="button" data-act="trans" data-val="${t}" aria-pressed="${scene.transition === t}">${t.toUpperCase()}</button>`).join('')}
       </div>
+      <button type="button" class="wm-btn wm-btn--ghost ftb-btn" data-act="ftb" id="btn-ftb" aria-pressed="${!!ftb.target}" title="จอดำ (B)">FTB</button>
       <button type="button" class="wm-btn wm-btn--ghost insp-open" data-act="open-insp">${icon('sliders')}<span>ปรับค่า</span></button>
     </div>
     <div class="wm-keys">
       <button type="button" class="wm-key wm-key--cut" data-act="cut" id="btn-cut">CUT<small>SPACE</small></button>
       <button type="button" class="wm-key wm-key--auto" data-act="auto" id="btn-auto">AUTO<small>${scene.transition.toUpperCase()} ${(scene.duration / 1000).toFixed(1)}s · ENTER</small></button>
-    </div>`;
+    </div>
+    <label class="tbar"><span class="tag">T-BAR</span>
+      <input type="range" class="wm-slider" id="tbar" min="0" max="100" step="1" value="${trans?.manual !== undefined ? tbarValue() : tbarBase}" aria-label="T-Bar เลื่อนเพื่อเปลี่ยนภาพเอง"></label>`;
 }
 
 /* ---------- inspector ---------- */
@@ -677,9 +806,9 @@ function switchRow(prop: string, label: string, on: boolean): string {
     <span>${label}</span><span class="wm-toggle ${on ? 'is-on' : ''}" aria-hidden="true"></span></button>`;
 }
 
-function segField(prop: string, label: string, opts: [string, string][], cur: string): string {
+function segField(prop: string, label: string, opts: [string, string][], cur: string, numeric = false): string {
   return `<div class="wm-field"><span>${label}</span><div class="wm-seg" role="group" aria-label="${label}">${opts.map(([v, l]) =>
-    `<button type="button" data-act="seg" data-prop="${prop}" data-val="${v}" aria-pressed="${v === cur}">${l}</button>`).join('')}</div></div>`;
+    `<button type="button" data-act="seg" data-prop="${prop}" data-val="${v}"${numeric ? ' data-num="1"' : ''} aria-pressed="${v === cur}">${l}</button>`).join('')}</div></div>`;
 }
 
 function textField(prop: string, label: string, value: string, ph = ''): string {
@@ -695,6 +824,7 @@ function tabsFor(s: Source): string[] {
   if (s.kind === 'mic' || s.kind === 'audio') return ['เสียง'];
   if (s.kind === 'text') return ['ข้อความ', 'ภาพ'];
   const t = ['ภาพ'];
+  if (s.kind === 'video' || s.kind === 'playlist') t.push('เล่น');
   if (media.get(s.id)?.gain) t.push('เสียง');
   t.push('เอฟเฟกต์');
   return t;
@@ -722,6 +852,24 @@ function inspectorBody(s: Source): string {
         ${isVisual(s.kind) ? switchRow('p:afv', 'เปิดเสียงเฉพาะตอนออกอากาศ (AFV)', p.afv) : ''}
         ${textField('n:name', 'ชื่อ', s.name)}`)}`;
   }
+  if (tab === 'เล่น') {
+    const m = media.get(s.id);
+    const playing = m?.el instanceof HTMLVideoElement && !m.el.paused;
+    return `
+      <div class="wm-row transport">
+        <button type="button" class="wm-btn wm-btn--primary" data-act="play" aria-label="${playing ? 'หยุดชั่วคราว' : 'เล่น'}">${icon(playing ? 'pause' : 'play')}${playing ? 'หยุด' : 'เล่น'}</button>
+        <button type="button" class="wm-btn wm-btn--icon" data-act="restart" aria-label="เริ่มใหม่จากต้น" title="เริ่มใหม่จากต้น">${icon('refresh')}</button>
+        ${m?.list ? `<button type="button" class="wm-btn wm-btn--icon" data-act="pl-prev" aria-label="ไฟล์ก่อนหน้า">${icon('prev')}</button>
+          <button type="button" class="wm-btn wm-btn--icon" data-act="pl-next" aria-label="ไฟล์ถัดไป">${icon('next')}</button>` : ''}
+      </div>
+      <label class="wm-field"><span>ตำแหน่ง <output class="timecode" id="tp-time">00:00:00 / 00:00:00</output></span>
+        <input type="range" class="wm-slider" id="seek" min="0" max="1000" value="0" aria-label="เลื่อนตำแหน่งวิดีโอ"></label>
+      ${switchRow('p:loop', s.kind === 'playlist' ? 'วนทั้งเพลย์ลิสต์' : 'เล่นวนซ้ำ', p.loop)}
+      ${switchRow('p:restartOnAir', 'เริ่มจากต้นเมื่อขึ้น PGM', p.restartOnAir)}
+      ${m?.list ? `<div class="wm-field"><span>ไฟล์ในเพลย์ลิสต์</span><ol class="pl-list">${m.list.map((f, i) =>
+        `<li><button type="button" class="pl-item" data-act="pl-go" data-i="${i}" aria-current="${i === m.index}">${esc(f.name)}</button></li>`).join('')}</ol>
+        <button type="button" class="wm-btn wm-btn--sm" data-act="pl-add">${icon('plus')}เพิ่มไฟล์</button></div>` : ''}`;
+  }
   if (tab === 'เอฟเฟกต์') {
     return `
       <div class="wm-field"><span>เอฟเฟกต์</span><div class="wm-row">
@@ -737,7 +885,8 @@ function inspectorBody(s: Source): string {
     ${switchRow('p:overlay', 'แสดงซ้อนบนจอ', p.overlay)}
     ${s.kind === 'color' ? `<label class="wm-field"><span>สีพื้น</span><input type="color" class="wm-color" data-prop="p:color" value="${esc(p.color)}"></label>` : ''}
     ${advanced(`
-      ${s.kind !== 'text' && s.kind !== 'color' ? segField('p:fit', 'การจัดภาพ', [['cover', 'เต็มจอ'], ['contain', 'พอดีจอ']], p.fit) : ''}
+      ${needsMedia(s.kind) ? segField('p:fit', 'การจัดภาพ', [['cover', 'เต็มจอ'], ['contain', 'พอดีจอ']], p.fit) : ''}
+      ${s.kind === 'camera' ? segField('p:res', 'ความละเอียดกล้อง', [['720p', '720p'], ['1080p', '1080p'], ['2160p', '4K']], p.res) : ''}
       ${rangeField('p:x', 'ตำแหน่งแนวนอน', p.x, -100, 100, 100, '')}
       ${rangeField('p:y', 'ตำแหน่งแนวตั้ง', p.y, -100, 100, 100, '')}
       ${textField('n:name', 'ชื่อ', s.name)}
@@ -755,10 +904,19 @@ function renderInspector(): void {
         ${textField('g:projectName', 'ชื่อโปรเจกต์', scene.projectName)}
         ${rangeField('g:duration', 'ระยะเวลา AUTO', scene.duration, 200, 3000, 1, 's', 100)}
         ${rangeField('g:master', 'ระดับเสียงรวม', scene.master, 0, 150)}
-        ${segField('g:resolution', 'ความละเอียดเอาต์พุต', [['720p', '720p'], ['1080p', '1080p']], scene.resolution)}
+        ${segField('g:resolution', 'ความละเอียดเอาต์พุต', [['720p', '720p'], ['1080p', '1080p'], ['2160p', '4K']], scene.resolution)}
+        ${segField('g:fps', 'เฟรมเรต', [['30', '30 fps'], ['60', '60 fps']], String(scene.fps), true)}
+        ${switchRow('ftb', 'จอดำ (FTB)', !!ftb.target)}
+        <div class="wm-field"><span>จอเอาต์พุต</span><div class="wm-row">
+          <button type="button" class="wm-btn" data-act="out-window" aria-pressed="${outputOpen()}">${icon('screen')}หน้าต่าง Program</button>
+          <button type="button" class="wm-btn" data-act="multiview" aria-pressed="${multiviewOpen()}">${icon('grid')}Multiview</button>
+          <button type="button" class="wm-btn" data-act="fullscreen">${icon('expand')}เต็มจอ</button>
+          <button type="button" class="wm-btn" data-act="snapshot">${icon('camera')}ภาพนิ่ง</button>
+        </div></div>
         ${advanced(`
           ${switchRow('g:monitor', 'ฟังเสียงมอนิเตอร์ที่เครื่องนี้', scene.monitor)}
           <p class="wm-note">เปิดเมื่อใส่หูฟังเท่านั้น เพื่อไม่ให้เสียงหอน</p>`)}
+        ${scene.resolution === '2160p' ? '<p class="wm-note">4K ต้องใช้เครื่องแรง (CPU 8 คอร์หรือการ์ดจอแยก) ถ้าภาพกระตุกให้ลดเป็น 1080p</p>' : ''}
         <p class="wm-note">แตะการ์ดในแถบล่างเพื่อปรับค่าแหล่งภาพนั้น</p>
       </div>`;
     return;
@@ -889,7 +1047,8 @@ function openSettings(): void {
     <section class="set-sec"><h3 class="label">คีย์ลัด</h3>
       <dl class="keys-list">
         <dt><kbd class="wm-kbd">SPACE</kbd></dt><dd>CUT ตัดภาพทันที</dd>
-        <dt><kbd class="wm-kbd">ENTER</kbd></dt><dd>AUTO เปลี่ยนภาพตามทรานซิชัน</dd>
+        <dt><kbd class="wm-kbd">ENTER</kbd></dt><dd>AUTO เปลี่ยนภาพตามทรานซิชัน (MIX, DIP, WIPE)</dd>
+        <dt><kbd class="wm-kbd">B</kbd></dt><dd>FTB จอดำ เปิด / ปิด</dd>
         <dt><kbd class="wm-kbd">1–9</kbd></dt><dd>ส่งแหล่งภาพไป PVW · กดเลขเดิมอีกครั้งเพื่อ CUT</dd>
         <dt><kbd class="wm-kbd">⌘Z</kbd> <kbd class="wm-kbd">⇧⌘Z</kbd></dt><dd>ย้อนกลับ / ทำซ้ำ</dd>
         <dt><kbd class="wm-kbd">DEL</kbd></dt><dd>ลบแหล่งภาพที่เลือก</dd>
@@ -915,6 +1074,18 @@ function openSettings(): void {
 
 /* ================= recording ================= */
 
+const stamp = () => new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '');
+
+function download(blob: Blob, name: string): void {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  window.setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
+}
+
 async function toggleRecord(): Promise<void> {
   if (ui.recorder) {
     const rec = ui.recorder;
@@ -922,20 +1093,14 @@ async function toggleRecord(): Promise<void> {
     renderChips();
     const blob = await rec.stop();
     const ext = rec.mime.includes('mp4') ? 'mp4' : 'webm';
-    const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '');
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `webmix-${stamp}.${ext}`;
-    document.body.append(a);
-    a.click();
-    a.remove();
-    window.setTimeout(() => URL.revokeObjectURL(a.href), 60_000);
-    toast(`บันทึกไฟล์ ${a.download} แล้ว (${(blob.size / 1e6).toFixed(1)} MB)`);
+    const name = `webmix-${stamp()}.${ext}`;
+    download(blob, name);
+    toast(`บันทึกไฟล์ ${name} แล้ว (${(blob.size / 1e6).toFixed(1)} MB)`);
     return;
   }
   if (typeof MediaRecorder === 'undefined') return toast('เบราว์เซอร์นี้บันทึกวิดีโอไม่ได้ ลองใช้ Chrome หรือ Edge');
   try {
-    ui.recorder = new Recorder($<HTMLCanvasElement>('#cv-pgm'));
+    ui.recorder = new Recorder($<HTMLCanvasElement>('#cv-pgm'), scene.fps);
     renderChips();
   } catch {
     toast('เริ่มบันทึกไม่ได้ ลองลดความละเอียดเป็น 720p แล้วลองอีกครั้ง');
@@ -948,10 +1113,21 @@ const pvwCtx = $<HTMLCanvasElement>('#cv-pvw').getContext('2d')!;
 const pgmCtx = $<HTMLCanvasElement>('#cv-pgm').getContext('2d')!;
 let lastThumb = 0;
 let lastChip = 0;
+let lastFrame = performance.now();
+
+function renderTransport(): void {
+  const el = media.get(ui.selected ?? '')?.el;
+  const out = document.getElementById('tp-time');
+  const seek = document.querySelector<HTMLInputElement>('#seek');
+  if (!(el instanceof HTMLVideoElement) || !out || !seek) return;
+  const d = Number.isFinite(el.duration) ? el.duration : 0;
+  out.textContent = `${fmtTime(el.currentTime * 1000)} / ${fmtTime(d * 1000)}`;
+  if (document.activeElement !== seek) seek.value = String(d ? Math.round((el.currentTime / d) * 1000) : 0);
+}
 
 function resizeOutput(): void {
   const c = pgmCtx.canvas;
-  const [w, h] = scene.resolution === '1080p' ? [1920, 1080] : [1280, 720];
+  const [w, h] = OUTPUT_SIZE[scene.resolution] ?? OUTPUT_SIZE['720p'];
   if (c.width !== w) {
     if (ui.recorder) return; // never resize mid-recording
     c.width = w;
@@ -960,10 +1136,16 @@ function resizeOutput(): void {
 }
 
 function frame(now: number): void {
-  if (trans && now - trans.start >= trans.dur) finishTransition();
-  drawBus(pgmCtx, scene, scene.pgm, trans, now);
+  if (trans && trans.manual === undefined && transitionProgress(trans, now) >= 1) finishTransition();
+  if (ftb.level !== ftb.target) {
+    const step = (now - lastFrame) / Math.max(100, scene.duration);
+    ftb.level = ftb.target > ftb.level ? Math.min(1, ftb.level + step) : Math.max(0, ftb.level - step);
+  }
+  lastFrame = now;
+  drawBus(pgmCtx, scene, scene.pgm, trans, now, ftb.level);
   drawBus(pvwCtx, scene, scene.pvw, null, now);
   updateGains(scene, onAir);
+  paintWindows(pgmCtx.canvas, pvwCtx.canvas, scene, now);
 
   if (now - lastThumb > 200) {
     lastThumb = now;
@@ -1068,13 +1250,69 @@ const actions: Record<string, (el: HTMLElement, e: MouseEvent) => void> = {
   switch: (el) => {
     const prop = el.dataset.prop!;
     const on = el.getAttribute('aria-checked') !== 'true';
+    if (prop === 'ftb') return toggleFtb();
     setProp(prop, on, false);
+    if (prop === 'p:loop' && ui.selected) {
+      const m = media.get(ui.selected);
+      if (m?.el instanceof HTMLVideoElement && !m.list) m.el.loop = on;
+    }
     if (prop === 'p:overlay') {
       const s = byId(ui.selected);
       if (s && on) mutateBusAfterOverlay(s.id);
     }
   },
-  seg: (el) => setProp(el.dataset.prop!, el.dataset.val, false),
+  seg: (el) => {
+    const prop = el.dataset.prop!;
+    setProp(prop, el.dataset.num ? Number(el.dataset.val) : el.dataset.val, false);
+    if (prop === 'p:res' && ui.selected) void reconnect(ui.selected);
+  },
+  ftb: toggleFtb,
+  play: () => {
+    const el = media.get(ui.selected ?? '')?.el;
+    if (!(el instanceof HTMLVideoElement)) return;
+    if (el.paused) void el.play().catch(() => toast('เล่นไฟล์นี้ไม่ได้ ลองเลือกไฟล์ใหม่'));
+    else el.pause();
+    renderInspector();
+  },
+  restart: () => {
+    const el = media.get(ui.selected ?? '')?.el;
+    if (el instanceof HTMLVideoElement) {
+      el.currentTime = 0;
+      void el.play().catch(() => undefined);
+      renderInspector();
+    }
+  },
+  'pl-prev': () => ui.selected && playlistGo(ui.selected, (media.get(ui.selected)?.index ?? 0) - 1),
+  'pl-next': () => ui.selected && playlistGo(ui.selected, (media.get(ui.selected)?.index ?? 0) + 1),
+  'pl-go': (el) => ui.selected && playlistGo(ui.selected, Number(el.dataset.i)),
+  'pl-add': () => void (async () => {
+    const id = ui.selected;
+    const m = id ? media.get(id) : undefined;
+    if (!id || !m?.list) return;
+    const files = await pickFiles('video/*');
+    if (!files.length) return;
+    m.list.push(...files.map((f) => ({ url: URL.createObjectURL(f), name: f.name })));
+    mutate((sc) => {
+      const t = sc.sources.find((x) => x.id === id);
+      if (t) t.meta = `${m.list!.length} ไฟล์`;
+    }, { toast: `เพิ่ม ${files.length} ไฟล์ในเพลย์ลิสต์แล้ว` });
+  })(),
+  'out-window': () => {
+    if (!openOutput(OUTPUT_SIZE[scene.resolution])) toast('เบราว์เซอร์บล็อกหน้าต่างใหม่ อนุญาตป๊อปอัปสำหรับเว็บนี้แล้วลองอีกครั้ง');
+    renderInspector();
+  },
+  multiview: () => {
+    if (!openMultiview()) toast('เบราว์เซอร์บล็อกหน้าต่างใหม่ อนุญาตป๊อปอัปสำหรับเว็บนี้แล้วลองอีกครั้ง');
+    renderInspector();
+  },
+  fullscreen: () => void $('#mon-pgm').requestFullscreen?.().catch(() => toast('เบราว์เซอร์นี้เปิดเต็มจอไม่ได้')),
+  snapshot: () => {
+    pgmCtx.canvas.toBlob((blob) => {
+      if (!blob) return toast('ถ่ายภาพนิ่งไม่ได้ ลองอีกครั้ง');
+      download(blob, `webmix-${stamp()}.png`);
+      toast('บันทึกภาพนิ่งแล้ว');
+    }, 'image/png');
+  },
   'reset-props': () => {
     const s = byId(ui.selected);
     if (!s) return;
@@ -1146,6 +1384,12 @@ $('#scrim').addEventListener('click', closeSheets);
 
 document.addEventListener('input', (e) => {
   const t = e.target as HTMLInputElement;
+  if (t.id === 'tbar') return onTbar(Number(t.value));
+  if (t.id === 'seek') {
+    const el = media.get(ui.selected ?? '')?.el;
+    if (el instanceof HTMLVideoElement && Number.isFinite(el.duration)) el.currentTime = (Number(t.value) / 1000) * el.duration;
+    return;
+  }
   if (t.id === 'q') {
     ui.query = t.value;
     renderGalleryGrid();
@@ -1209,6 +1453,7 @@ document.addEventListener('keydown', (e) => {
     e.preventDefault();
     return auto();
   }
+  if (e.key === 'b' || e.key === 'B') return toggleFtb();
   if (/^[1-9]$/.test(e.key)) {
     const s = cutSources()[Number(e.key) - 1];
     if (!s) return;
