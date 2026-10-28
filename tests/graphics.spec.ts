@@ -95,6 +95,7 @@ test('empty overlay button picks a source; a camera becomes a PIP; cue shows on 
   await addTile(page, 'text', 't-l3');
   await ovlBtn(page, 1).click();
   await expect(ovlBtn(page, 1)).toHaveAttribute('aria-pressed', 'false');
+  await page.waitForTimeout(700); // let the slide-out finish
   const before = await pgmPixel(page, 0.12, 0.82);
   await insp(page).locator('[data-act="advanced"]').click();
   await insp(page).locator('[data-prop="o:cue"]').click();

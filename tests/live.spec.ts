@@ -128,7 +128,7 @@ test('remote guest hears and sees the programme back', async ({ page, browser })
   await dlg(page).locator('#guest-name').fill('คุณสมชาย');
   await dlg(page).locator('#guest-name').press('Tab');
   const link = dlg(page).locator('#remote-link');
-  await expect(link).toHaveValue(/guest=1/, { timeout: 15000 });
+  await expect(link).toHaveValue(/guest=1.*name=/, { timeout: 15000 });
   const url = await link.inputValue();
   expect(url).toContain('name=');
 

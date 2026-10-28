@@ -75,7 +75,7 @@ test('playlist plays files in order with transport controls', async ({ page }) =
     { name: 'two.webm', mimeType: 'video/webm', buffer: b },
   ]);
   await expect(cards(page)).toHaveCount(1);
-  await expect(cards(page).first()).toContainText('2 ไฟล์');
+  await expect(cards(page).first()).toContainText('1/2');
   await cards(page).first().click();
   await page.locator('#insp [data-act="tab"][data-val="เล่น"]').click();
   const items = page.locator('#insp .pl-item');
@@ -99,11 +99,12 @@ test('single video loop and restart-on-air switches', async ({ page }) => {
   await chooser.setFiles({ name: 'clip.webm', mimeType: 'video/webm', buffer: a });
   await cards(page).first().click();
   await page.locator('#insp [data-act="tab"][data-val="เล่น"]').click();
+  // clips play once by default; loop is a switch away
   const loop = page.locator('#insp [data-prop="p:loop"]');
-  await expect(loop).toHaveAttribute('aria-checked', 'true');
+  await expect(loop).toHaveAttribute('aria-checked', 'false');
   await loop.click();
-  await expect(page.locator('#insp [data-prop="p:loop"]')).toHaveAttribute('aria-checked', 'false');
-  expect(await page.evaluate(() => document.querySelector<HTMLVideoElement>('.media-pool video')!.loop)).toBe(false);
+  await expect(page.locator('#insp [data-prop="p:loop"]')).toHaveAttribute('aria-checked', 'true');
+  expect(await page.evaluate(() => document.querySelector<HTMLVideoElement>('.media-pool video')!.loop)).toBe(true);
   await page.locator('#insp [data-prop="p:restartOnAir"]').click();
   await expect(page.locator('#insp [data-prop="p:restartOnAir"]')).toHaveAttribute('aria-checked', 'true');
 });

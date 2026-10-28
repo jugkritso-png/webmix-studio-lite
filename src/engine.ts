@@ -61,23 +61,22 @@ export function videoForStream(stream: MediaStream): HTMLVideoElement {
   return el;
 }
 
+/** file players start paused on their first frame; they roll when taken to air (or by hand) */
 export function videoForUrl(url: string): HTMLVideoElement {
   const el = document.createElement('video');
   el.src = url;
-  el.loop = true;
+  el.preload = 'auto';
   el.playsInline = true;
   el.crossOrigin = 'anonymous';
   mediaPool().append(el);
-  void el.play().catch(() => undefined);
   return el;
 }
 
 export function audioForUrl(url: string): HTMLAudioElement {
   const el = document.createElement('audio');
   el.src = url;
-  el.loop = true;
+  el.preload = 'auto';
   mediaPool().append(el);
-  void el.play().catch(() => undefined);
   return el;
 }
 

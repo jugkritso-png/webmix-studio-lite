@@ -7,6 +7,7 @@ import {
   type Kind, type OverlayFx, type Props, type Resolution, type Scene, type Source, type TextStyle,
 } from './scene';
 import { fetchRows, REFRESH_MS } from './data';
+import { getFiles, pruneFiles, putFiles, type StoredFile } from './filestore';
 import {
   attachElementAudio, attachStreamAudio, bar, canPickOutput, dropMixMinus, ensureAudio, limiterReduction, loudness, masterMeter, meter,
   mixMinus, outputDevices, releaseStrip, resetLoudness, setOutputDevice, updateAudio,
@@ -247,7 +248,26 @@ async function refreshDevices(): Promise<void> {
   } catch { /* enumerateDevices unavailable */ }
 }
 
-interface Acquired { m: Media; meta: string; name?: string; dataUrl?: string }
+interface Acquired { m: Media; meta: string; name?: string; dataUrl?: string; files?: File[] }
+
+const ext = (name: string, fallback: string) => name.split('.').pop()?.toUpperCase() ?? fallback;
+
+/** players for picked or stored files: one video / audio element, or a playlist over several files */
+function fileMedia(kind: Kind, files: { name: string; blob: Blob }[]): Media {
+  if (kind === 'playlist') {
+    const list = files.map((f) => ({ url: URL.createObjectURL(f.blob), name: f.name }));
+    const el = videoForUrl(list[0].url);
+    const m: Media = { el, list, index: 0 };
+    attachElementAudio(m, el);
+    return m;
+  }
+  const url = URL.createObjectURL(files[0].blob);
+  if (kind === 'image') return { el: imageFor(url), url };
+  const el = kind === 'audio' ? audioForUrl(url) : videoForUrl(url);
+  const m: Media = { el, url };
+  attachElementAudio(m, el);
+  return m;
+}
 
 const CAPTURE: Record<Resolution, { width: { ideal: number }; height: { ideal: number } }> = {
   '720p': { width: { ideal: 1280 }, height: { ideal: 720 } },
@@ -285,36 +305,24 @@ async function acquire(kind: Kind, deviceId?: string, res: Resolution = '1080p')
     case 'video': {
       const f = await pickFile('video/*');
       if (!f) return null;
-      const url = URL.createObjectURL(f);
-      const el = videoForUrl(url);
-      const m: Media = { el, url };
-      attachElementAudio(m, el);
-      return { m, meta: f.name.split('.').pop()?.toUpperCase() ?? 'VIDEO', name: f.name };
+      return { m: fileMedia('video', [{ name: f.name, blob: f }]), meta: ext(f.name, 'VIDEO'), name: f.name, files: [f] };
     }
     case 'playlist': {
       const files = await pickFiles('video/*');
       if (!files.length) return null;
-      const list = files.map((f) => ({ url: URL.createObjectURL(f), name: f.name }));
-      const el = videoForUrl(list[0].url);
-      el.loop = false;
-      const m: Media = { el, list, index: 0 };
-      attachElementAudio(m, el);
-      return { m, meta: `${list.length} ไฟล์` };
+      return { m: fileMedia('playlist', files.map((f) => ({ name: f.name, blob: f }))), meta: `${files.length} ไฟล์`, files };
     }
     case 'audio': {
       const f = await pickFile('audio/*');
       if (!f) return null;
-      const url = URL.createObjectURL(f);
-      const el = audioForUrl(url);
-      const m: Media = { el, url };
-      attachElementAudio(m, el);
-      return { m, meta: f.name.split('.').pop()?.toUpperCase() ?? 'AUDIO', name: f.name };
+      return { m: fileMedia('audio', [{ name: f.name, blob: f }]), meta: ext(f.name, 'AUDIO'), name: f.name, files: [f] };
     }
     case 'image': {
       const f = await pickFile('image/*');
       if (!f) return null;
       const dataUrl = await readDataUrl(f);
-      return { m: { el: imageFor(dataUrl) }, meta: f.name.split('.').pop()?.toUpperCase() ?? 'IMG', name: f.name, dataUrl };
+      // small pictures ride inside the saved show; big ones are kept as file copies
+      return { m: { el: imageFor(dataUrl) }, meta: ext(f.name, 'IMG'), name: f.name, dataUrl, files: dataUrl.length >= 1_500_000 ? [f] : undefined };
     }
     default:
       return null;
@@ -323,12 +331,12 @@ async function acquire(kind: Kind, deviceId?: string, res: Resolution = '1080p')
 
 const WHAT: Partial<Record<Kind, string>> = { camera: 'กล้อง', screen: 'การแชร์หน้าจอ', mic: 'ไมโครโฟน', video: 'ไฟล์วิดีโอ', playlist: 'เพลย์ลิสต์', audio: 'ไฟล์เสียง', image: 'รูปภาพ' };
 
-/** Wire file playback: loop flag, and playlists advancing to the next file. */
+/** Wire file playback: loop flag, playlists advancing, and a clear message when a file will not play. */
 function wirePlayback(id: string, m: Media): void {
   const el = m.el;
-  if (!(el instanceof HTMLVideoElement)) return;
+  if (!(el instanceof HTMLMediaElement)) return;
   const s = byId(id);
-  el.loop = !m.list && (s?.props.loop ?? true);
+  el.loop = !m.list && (s?.props.loop ?? false);
   el.addEventListener('ended', () => {
     const src = byId(id);
     if (!m.list || !src) return;
@@ -339,6 +347,65 @@ function wirePlayback(id: string, m: Media): void {
   el.addEventListener('timeupdate', () => {
     if (ui.selected === id && ui.tab === 'เล่น') renderTransport();
   });
+  el.addEventListener('error', () => {
+    const src = byId(id);
+    const name = m.list?.[m.index ?? 0]?.name ?? src?.name ?? 'ไฟล์นี้';
+    toast(`เล่น ${name} ไม่ได้ เบราว์เซอร์อาจไม่รองรับรูปแบบไฟล์ ลองแปลงเป็น MP4 (H.264) หรือ WebM`);
+    if (src) {
+      src.meta = 'เล่นไม่ได้';
+      renderStrip();
+    }
+  });
+}
+
+/** rebuild a file source from the browser's stored copy after a reload or an undo */
+async function restoreFiles(s: Source): Promise<boolean> {
+  const files: StoredFile[] | null = await getFiles(s.id);
+  if (!files?.length || media.has(s.id) || !byId(s.id)) return false;
+  const m = fileMedia(s.kind, files);
+  media.set(s.id, m);
+  wirePlayback(s.id, m);
+  renderStrip();
+  if (ui.selected === s.id) renderInspector();
+  return true;
+}
+
+/** play / pause file sources as they go on and off air */
+const wasOnAir = new Map<string, boolean>();
+function followAir(): void {
+  for (const s of scene.sources) {
+    if (s.kind !== 'video' && s.kind !== 'playlist') continue;
+    const el = media.get(s.id)?.el;
+    if (!(el instanceof HTMLVideoElement)) continue;
+    const air = onAir(s.id);
+    if (wasOnAir.get(s.id) === air) continue;
+    wasOnAir.set(s.id, air);
+    if (!s.props.autoPlay) continue;
+    if (air) {
+      if (s.props.restartOnAir || el.ended) {
+        if (s.kind === 'playlist' && s.props.restartOnAir) playlistGo(s.id, 0);
+        el.currentTime = 0;
+      }
+      void el.play().catch(() => undefined);
+    } else {
+      el.pause();
+    }
+    if (ui.selected === s.id && ui.tab === 'เล่น') renderInspector();
+  }
+}
+
+const fmtShort = (sec: number) => fmtTime(Math.max(0, sec) * 1000).replace(/^00:/, '');
+
+/** what a file card says under its name: playing / paused, time left */
+function playbackLine(s: Source): string {
+  const el = media.get(s.id)?.el;
+  if (!(el instanceof HTMLMediaElement)) return s.meta;
+  const d = Number.isFinite(el.duration) ? el.duration : 0;
+  if (el.error) return 'เล่นไม่ได้';
+  if (el.ended || (d && el.currentTime >= d - 0.05 && el.paused)) return 'จบแล้ว';
+  const left = d ? ` −${fmtShort(d - el.currentTime)}` : '';
+  const pl = media.get(s.id)?.list ? ` · ${(media.get(s.id)?.index ?? 0) + 1}/${media.get(s.id)!.list!.length}` : '';
+  return `${el.paused ? 'หยุด' : 'เล่น'}${left}${pl}`;
 }
 
 function playlistGo(id: string, index: number): void {
@@ -350,19 +417,10 @@ function playlistGo(id: string, index: number): void {
   if (ui.selected === id) renderInspector();
 }
 
-/** A file source that should start from the top when it is taken to air. */
-function goingOnAir(id: string | null): void {
-  const s = byId(id);
-  const el = id ? media.get(id)?.el : undefined;
-  if (!s?.props.restartOnAir || !(el instanceof HTMLVideoElement)) return;
-  if (s.kind === 'playlist') playlistGo(s.id, 0);
-  el.currentTime = 0;
-  void el.play().catch(() => undefined);
-}
-
 function ensureMedia(s: Source, auto: boolean): void {
   if (media.has(s.id)) return;
   if (s.kind === 'image' && s.dataUrl) media.set(s.id, { el: imageFor(s.dataUrl) });
+  else if (['video', 'playlist', 'audio', 'image'].includes(s.kind)) void restoreFiles(s);
   else if (auto && (s.kind === 'camera' || s.kind === 'mic')) void autoReconnect(s);
 }
 
@@ -385,6 +443,7 @@ async function reconnect(id: string): Promise<void> {
     free(id);
     media.set(id, got.m);
     wirePlayback(id, got.m);
+    if (got.files) void putFiles(id, got.files);
     mutate((sc) => {
       const t = sc.sources.find((x) => x.id === id);
       if (t) {
@@ -411,10 +470,12 @@ async function addMedia(kind: Kind, label: string, target?: Target, deviceId?: s
     if (kind === 'video' || kind === 'audio' || kind === 'screen' || kind === 'mic') ensureAudio();
     const got = await acquire(kind, deviceId);
     if (!got) return;
-    const s = newSource(kind, got.name ?? `${label} ${countOf(kind)}`, got.meta, { afv: kind === 'video' || kind === 'playlist', ...extra });
+    const clip = kind === 'video' || kind === 'playlist';
+    const s = newSource(kind, got.name ?? `${label} ${countOf(kind)}`, got.meta, { afv: clip, loop: kind === 'audio', ...extra });
     wirePlayback(s.id, got.m);
     if (deviceId) s.deviceId = deviceId;
     if (got.dataUrl) s.dataUrl = got.dataUrl;
+    if (got.files) void putFiles(s.id, got.files).then((ok) => !ok && toast('เก็บสำเนาไฟล์ในเบราว์เซอร์ไม่ได้ (พื้นที่เต็ม) หลังเปิดหน้าใหม่ต้องเลือกไฟล์อีกครั้ง'));
     if (kind === 'screen') {
       got.m.stream?.getVideoTracks()[0]?.addEventListener('ended', () => {
         if (byId(s.id)) toast(`หยุดแชร์หน้าจอ ${s.name} แล้ว กดเชื่อมต่อใหม่เพื่อแชร์อีกครั้ง`);
@@ -494,7 +555,6 @@ function cut(): void {
   finishTransition();
   if (!scene.pvw || scene.pvw === scene.pgm) return;
   const old = scene.pgm;
-  goingOnAir(scene.pvw);
   scene.pgm = scene.pvw;
   scene.pvw = old ?? scene.pvw;
   changed(false);
@@ -510,7 +570,6 @@ function auto(): void {
   }
   if (trans) return finishTransition();
   if (!scene.pvw || scene.pvw === scene.pgm) return;
-  goingOnAir(scene.pvw);
   trans = { from: scene.pgm, to: scene.pvw, start: now, dur: scene.duration, type: scene.transition };
   renderTally();
 }
@@ -521,8 +580,7 @@ function onTbar(value: number): void {
   const pos = Math.abs(value - tbarBase) / 100;
   if (!trans) {
     if (pos === 0 || !scene.pvw || scene.pvw === scene.pgm) return;
-    goingOnAir(scene.pvw);
-    trans = { from: scene.pgm, to: scene.pvw, start: performance.now(), dur: scene.duration, type: scene.transition, manual: pos };
+      trans = { from: scene.pgm, to: scene.pvw, start: performance.now(), dur: scene.duration, type: scene.transition, manual: pos };
     renderTally();
   } else if (trans.manual !== undefined) {
     trans.manual = pos;
@@ -905,7 +963,7 @@ function cardHtml(s: Source, i: number): string {
   const isPvw = !isPgm && scene.pvw === s.id;
   const word = isPgm ? 'PGM' : isPvw ? 'PVW' : '';
   const ch = chOf(s.id);
-  const sub = ch >= 0 ? `Overlay ${ch + 1} · ${scene.overlays[ch].on ? 'ออนแอร์' : 'ซ่อนอยู่'}` : s.meta;
+  const sub = ch >= 0 ? `Overlay ${ch + 1} · ${scene.overlays[ch].on ? 'ออนแอร์' : 'ซ่อนอยู่'}` : s.kind === 'video' || s.kind === 'playlist' ? playbackLine(s) : s.meta;
   return `
     <div class="wm-card ${isPgm ? 'is-pgm' : isPvw ? 'is-pvw' : ''} ${ui.selected === s.id ? 'is-selected' : ''}" role="button" tabindex="0" draggable="true"
       data-act="card" data-id="${s.id}" aria-label="${i < 9 ? `${i + 1} ` : ''}${esc(s.name)}${word ? ` ${word}` : ''}">
@@ -1002,12 +1060,12 @@ function advanced(inner: string): string {
 }
 
 function tabsFor(s: Source): string[] {
-  if (s.kind === 'mic' || s.kind === 'audio') return ['เสียง'];
+  if (s.kind === 'mic') return ['เสียง'];
+  if (s.kind === 'audio') return ['เล่น', 'เสียง'];
   if (s.kind === 'text') return ['ข้อความ', 'ภาพ', 'ข้อมูล'];
   if (s.kind === 'timer') return ['เวลา', 'ภาพ'];
   if (s.kind === 'score') return ['คะแนน', 'ภาพ', 'ข้อมูล'];
-  const t = ['ภาพ'];
-  if (s.kind === 'video' || s.kind === 'playlist') t.push('เล่น');
+  const t = s.kind === 'video' || s.kind === 'playlist' ? ['เล่น', 'ภาพ'] : ['ภาพ'];
   if (media.get(s.id)?.strip) t.push('เสียง');
   t.push('เอฟเฟกต์');
   return t;
@@ -1160,7 +1218,8 @@ function inspectorBody(s: Source): string {
   }
   if (tab === 'เล่น') {
     const m = media.get(s.id);
-    const playing = m?.el instanceof HTMLVideoElement && !m.el.paused;
+    const playing = m?.el instanceof HTMLMediaElement && !m.el.paused;
+    const clip = s.kind !== 'audio';
     return `
       <div class="wm-row transport">
         <button type="button" class="wm-btn wm-btn--primary" data-act="play" aria-label="${playing ? 'หยุดชั่วคราว' : 'เล่น'}">${icon(playing ? 'pause' : 'play')}${playing ? 'หยุด' : 'เล่น'}</button>
@@ -1171,7 +1230,8 @@ function inspectorBody(s: Source): string {
       <label class="wm-field"><span>ตำแหน่ง <output class="timecode" id="tp-time">00:00:00 / 00:00:00</output></span>
         <input type="range" class="wm-slider" id="seek" min="0" max="1000" value="0" aria-label="เลื่อนตำแหน่งวิดีโอ"></label>
       ${switchRow('p:loop', s.kind === 'playlist' ? 'วนทั้งเพลย์ลิสต์' : 'เล่นวนซ้ำ', p.loop)}
-      ${switchRow('p:restartOnAir', 'เริ่มจากต้นเมื่อขึ้น PGM', p.restartOnAir)}
+      ${clip ? switchRow('p:autoPlay', 'เล่นเองเมื่อขึ้น PGM · หยุดเมื่อลง', p.autoPlay) : ''}
+      ${clip ? switchRow('p:restartOnAir', 'เริ่มจากต้นทุกครั้งที่ขึ้น PGM', p.restartOnAir) : ''}
       ${m?.list ? `<div class="wm-field"><span>ไฟล์ในเพลย์ลิสต์</span><ol class="pl-list">${m.list.map((f, i) =>
         `<li><button type="button" class="pl-item" data-act="pl-go" data-i="${i}" aria-current="${i === m.index}">${esc(f.name)}</button></li>`).join('')}</ol>
         <button type="button" class="wm-btn wm-btn--sm" data-act="pl-add">${icon('plus')}เพิ่มไฟล์</button></div>` : ''}`;
@@ -1534,11 +1594,9 @@ function openRemote(kind: RemoteKind, name = ''): void {
   renderRemoteDialog(true);
 }
 
-function renderRemoteDialog(force = false): void {
-  if (!force && !document.getElementById('remote-qr')) return;
+function remoteState(): { link: string; qr: string; status: string; error: boolean } {
   const st = studio;
-  const ready = st?.status === 'ready';
-  const link = ready ? st.link(remoteKind, remoteName) : '';
+  const link = st?.status === 'ready' ? st.link(remoteKind, remoteName) : '';
   let qr = '';
   if (link) {
     const q = qrcode(0, 'M');
@@ -1551,12 +1609,30 @@ function renderRemoteDialog(force = false): void {
     : st.status === 'unavailable' ? 'โหลดระบบเชื่อมต่อไม่ได้ ตรวจอินเทอร์เน็ตแล้วลองอีกครั้ง'
       : st.status === 'offline' ? 'เชื่อมต่อเซิร์ฟเวอร์จับคู่ไม่ได้ ตรวจอินเทอร์เน็ตแล้วลองอีกครั้ง'
         : guest ? 'ส่งลิงก์ให้แขกทาง LINE หรืออีเมล แขกจะเห็นและได้ยินรายการ (ไม่ได้ยินเสียงตัวเอง)' : 'สแกน QR ด้วยมือถือ แล้วกดเชื่อมต่อ ภาพจะขึ้นเป็นการ์ดใหม่';
+  return { link, qr, status, error: !!st && ['offline', 'unavailable'].includes(st.status) };
+}
+
+/** refresh the QR, link and status in place: never rebuilds the name field someone may be typing in */
+function renderRemoteDialog(force = false): void {
+  const box = document.getElementById('remote-qr');
+  if (!force && !box) return;
+  const r = remoteState();
+  if (box && !force) {
+    box.querySelector('.remote__qr')!.innerHTML = r.qr || '<span class="wm-note">รอสักครู่…</span>';
+    (box.querySelector('#remote-link') as HTMLInputElement).value = r.link;
+    (box.querySelector('#remote-copy') as HTMLButtonElement).disabled = !r.link;
+    const st = box.querySelector('#remote-status')!;
+    st.textContent = r.status;
+    st.classList.toggle('wm-help--err', r.error);
+    return;
+  }
+  const guest = remoteKind === 'guest';
   const body = `<div class="remote" id="remote-qr">
       ${guest ? `<label class="wm-field"><span>ชื่อแขก</span><input class="wm-input" id="guest-name" value="${esc(remoteName)}" placeholder="เช่น คุณสมชาย" autocomplete="off"></label>` : ''}
-      <div class="remote__qr" aria-label="QR Code สำหรับเชื่อมต่อ">${qr || '<span class="wm-note">รอสักครู่…</span>'}</div>
-      <div class="key-row"><input class="wm-input" id="remote-link" readonly value="${esc(link)}" aria-label="ลิงก์เชื่อมต่อ">
-        <button type="button" class="wm-btn" id="remote-copy" ${link ? '' : 'disabled'}>คัดลอก</button></div>
-      <p class="wm-help ${st && ['offline', 'unavailable'].includes(st.status) ? 'wm-help--err' : ''}" id="remote-status">${status}</p>
+      <div class="remote__qr" aria-label="QR Code สำหรับเชื่อมต่อ">${r.qr || '<span class="wm-note">รอสักครู่…</span>'}</div>
+      <div class="key-row"><input class="wm-input" id="remote-link" readonly value="${esc(r.link)}" aria-label="ลิงก์เชื่อมต่อ">
+        <button type="button" class="wm-btn" id="remote-copy" ${r.link ? '' : 'disabled'}>คัดลอก</button></div>
+      <p class="wm-help ${r.error ? 'wm-help--err' : ''}" id="remote-status">${r.status}</p>
       <p class="wm-note">ไม่มี Stream Gateway ใช้ระบบจับคู่สาธารณะของ PeerJS ได้กับ Wi-Fi ส่วนใหญ่ ถ้ามือถือใช้ 4G / 5G แล้วต่อไม่ติด ให้ตั้ง Gateway (มี TURN) ในหน้าไลฟ์</p>
     </div>`;
   const d = openDialog(guest ? 'เชิญแขกทางไกล' : 'เพิ่มกล้องมือถือ', body, '<button class="wm-btn" value="close">ปิด</button>');
@@ -1564,7 +1640,7 @@ function renderRemoteDialog(force = false): void {
     const v = (d.querySelector('#remote-link') as HTMLInputElement).value;
     void navigator.clipboard?.writeText(v).then(() => toast('คัดลอกลิงก์แล้ว'), () => toast('คัดลอกไม่ได้ กดค้างที่ลิงก์เพื่อคัดลอกเอง'));
   });
-  d.querySelector('#guest-name')?.addEventListener('change', (e) => {
+  d.querySelector('#guest-name')?.addEventListener('input', (e) => {
     remoteName = (e.target as HTMLInputElement).value.trim();
     renderRemoteDialog();
   });
@@ -1683,7 +1759,7 @@ function renderTransport(): void {
   const el = media.get(ui.selected ?? '')?.el;
   const out = document.getElementById('tp-time');
   const seek = document.querySelector<HTMLInputElement>('#seek');
-  if (!(el instanceof HTMLVideoElement) || !out || !seek) return;
+  if (!(el instanceof HTMLMediaElement) || !out || !seek) return;
   const d = Number.isFinite(el.duration) ? el.duration : 0;
   out.textContent = `${fmtTime(el.currentTime * 1000)} / ${fmtTime(d * 1000)}`;
   if (document.activeElement !== seek) seek.value = String(d ? Math.round((el.currentTime / d) * 1000) : 0);
@@ -1710,6 +1786,7 @@ function frame(now: number): void {
   drawBus(pgmCtx, scene, scene.pgm, trans, now, ftb.level, ls);
   drawBus(pvwCtx, scene, scene.pvw, null, now, 0, previewLayers(ls));
   updateAudio(scene, onAir);
+  followAir();
   paintWindows(pgmCtx.canvas, pvwCtx.canvas, scene, now);
 
   if (now - lastThumb > 200) {
@@ -1721,6 +1798,11 @@ function frame(now: number): void {
       ctx.fillStyle = tk('card-ground');
       ctx.fillRect(0, 0, cv.width, cv.height);
       drawSource(ctx, s, cv.width, cv.height);
+      if ((s.kind === 'video' || s.kind === 'playlist') && !isGraphic(s.id)) {
+        const sub = cv.closest('.wm-card')?.querySelector('.wm-card__sub');
+        const line = playbackLine(s);
+        if (sub && sub.textContent !== line) sub.textContent = line;
+      }
     });
   }
   paintMeters(now);
@@ -1835,7 +1917,7 @@ const actions: Record<string, (el: HTMLElement, e: MouseEvent) => void> = {
     setProp(prop, on, false);
     if (prop === 'p:loop' && ui.selected) {
       const m = media.get(ui.selected);
-      if (m?.el instanceof HTMLVideoElement && !m.list) m.el.loop = on;
+      if (m?.el instanceof HTMLMediaElement && !m.list) m.el.loop = on;
     }
   },
   seg: (el) => {
@@ -1935,14 +2017,14 @@ const actions: Record<string, (el: HTMLElement, e: MouseEvent) => void> = {
   },
   play: () => {
     const el = media.get(ui.selected ?? '')?.el;
-    if (!(el instanceof HTMLVideoElement)) return;
+    if (!(el instanceof HTMLMediaElement)) return;
     if (el.paused) void el.play().catch(() => toast('เล่นไฟล์นี้ไม่ได้ ลองเลือกไฟล์ใหม่'));
     else el.pause();
     renderInspector();
   },
   restart: () => {
     const el = media.get(ui.selected ?? '')?.el;
-    if (el instanceof HTMLVideoElement) {
+    if (el instanceof HTMLMediaElement) {
       el.currentTime = 0;
       void el.play().catch(() => undefined);
       renderInspector();
@@ -1958,6 +2040,7 @@ const actions: Record<string, (el: HTMLElement, e: MouseEvent) => void> = {
     const files = await pickFiles('video/*');
     if (!files.length) return;
     m.list.push(...files.map((f) => ({ url: URL.createObjectURL(f), name: f.name })));
+    void getFiles(id).then((old) => putFiles(id, [...(old ?? []), ...files.map((f) => ({ name: f.name, type: f.type, blob: f as Blob }))]));
     mutate((sc) => {
       const t = sc.sources.find((x) => x.id === id);
       if (t) t.meta = `${m.list!.length} ไฟล์`;
@@ -2070,7 +2153,7 @@ document.addEventListener('input', (e) => {
   if (t.id === 'tbar') return onTbar(Number(t.value));
   if (t.id === 'seek') {
     const el = media.get(ui.selected ?? '')?.el;
-    if (el instanceof HTMLVideoElement && Number.isFinite(el.duration)) el.currentTime = (Number(t.value) / 1000) * el.duration;
+    if (el instanceof HTMLMediaElement && Number.isFinite(el.duration)) el.currentTime = (Number(t.value) / 1000) * el.duration;
     return;
   }
   if (t.id === 'q') {
@@ -2240,6 +2323,9 @@ renderTop();
 renderAll();
 for (const s of scene.sources) ensureMedia(s, true);
 if (scene.sinkId) void setOutputDevice(scene.sinkId);
+void pruneFiles(new Set(scene.sources.map((s) => s.id)));
+// restored clips build their audio before any click; wake the audio engine on the first one
+document.addEventListener('pointerdown', () => ensureAudio(), { once: true, capture: true });
 if (scene.sources.some((s) => s.kind === 'remote')) ensureStudio();
 window.addEventListener('beforeunload', (e) => {
   if (livePanel.live || ui.recorder) e.preventDefault();

@@ -45,6 +45,8 @@ export interface Props {
   loop: boolean;
   /** video / playlist: restart from the top each time it goes on air */
   restartOnAir: boolean;
+  /** video / playlist: play when it goes on air, pause when it leaves */
+  autoPlay: boolean;
   /** crop as fractions of each edge */
   cropL: number;
   cropR: number;
@@ -130,7 +132,7 @@ export function defaultProps(): Props {
     scale: 1, opacity: 1, flip: false, x: 0, y: 0, fit: 'cover',
     volume: 1, muted: false, afv: false, filter: '',
     title: '', sub: '', style: 'lower', tone: 'accent', color: '',
-    res: '1080p', loop: true, restartOnAir: false,
+    res: '1080p', loop: true, restartOnAir: false, autoPlay: true,
     cropL: 0, cropR: 0, cropT: 0, cropB: 0, border: 0, borderTone: 'accent', key: 'off', keyTol: 80,
     items: '', speed: 90,
     timerMode: 'down', timerDur: 300_000, timerStart: 0, timerAcc: 0,
