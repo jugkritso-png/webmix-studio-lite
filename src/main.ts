@@ -8,8 +8,13 @@ import {
 } from './scene';
 import { fetchRows, REFRESH_MS } from './data';
 import {
-  attachElementAudio, attachStreamAudio, audioForUrl, drawBus, drawSource, ensureAudio, imageFor,
-  level, masterLevel, media, Recorder, release, tk, updateGains, videoForStream, videoForUrl,
+  attachElementAudio, attachStreamAudio, bar, canPickOutput, ensureAudio, limiterReduction, loudness, masterMeter, meter,
+  outputDevices, resetLoudness, setOutputDevice, updateAudio,
+} from './audio';
+import { Recorder } from './recorder';
+import {
+  audioForUrl, drawBus, drawSource, imageFor,
+  media, release, tk, videoForStream, videoForUrl,
   fmtClock, timerValue, transitionProgress, type Layer, type Media, type TransitionState,
 } from './engine';
 import { multiviewOpen, openMultiview, openOutput, outputOpen, paintWindows } from './windows';
@@ -42,6 +47,7 @@ const ui = {
   recorder: null as Recorder | null,
   cameras: [] as MediaDeviceInfo[],
   mics: [] as MediaDeviceInfo[],
+  outputs: [] as MediaDeviceInfo[],
 };
 let trans: TransitionState | null = null;
 /** fade to black: target 0/1, level eases towards it */
@@ -219,6 +225,7 @@ async function refreshDevices(): Promise<void> {
     const all = await navigator.mediaDevices.enumerateDevices();
     ui.cameras = all.filter((d) => d.kind === 'videoinput' && d.label);
     ui.mics = all.filter((d) => d.kind === 'audioinput' && d.label && d.deviceId !== 'default' && d.deviceId !== 'communications');
+    ui.outputs = (await outputDevices()).filter((d) => d.deviceId !== 'default' && d.deviceId !== 'communications');
     if (ui.cat === 'source' || ui.cat === 'audio') renderGalleryGrid();
   } catch { /* enumerateDevices unavailable */ }
 }
@@ -760,7 +767,7 @@ function renderChips(): void {
   $('#chips').innerHTML = `
     ${ftb.target ? '<span class="wm-chip wm-chip--warn" id="chip-ftb"><span class="wm-dot"></span>FTB จอดำ</span>'
       : `<span class="wm-chip chip-res">${RES_LABEL[scene.resolution]} <b>${scene.fps}</b></span>`}
-    <span class="wm-chip chip-audio" title="ระดับเสียงรวม">เสียง<span class="mini-meter"><i id="meter-master"></i></span></span>
+    <span class="wm-chip chip-audio" title="ความดังระยะสั้น (LUFS)">เสียง <b id="chip-lufs">−∞</b><span class="mini-meter"><i id="meter-master"></i></span></span>
     ${rec ? `<span class="wm-chip wm-chip--warn" id="chip-rec"><span class="wm-dot"></span>REC <b id="rec-time">${fmtTime(performance.now() - rec.started)}</b></span>` : ''}`;
   const btn = $('#btn-rec');
   btn.innerHTML = rec ? `${icon('stop')}<span>หยุดบันทึก</span>` : `${icon('rec')}<span>บันทึก</span>`;
@@ -809,16 +816,31 @@ function renderGalleryExtra(): void {
   const box = document.getElementById('g-extra');
   if (!box) return;
   if (ui.cat === 'audio') {
-    const list = scene.sources.filter((s) => media.get(s.id)?.gain || s.kind === 'mic' || s.kind === 'audio');
-    box.innerHTML = `<h3 class="g-sub">มิกเซอร์</h3>${list.length ? list.map((s) => `
-      <div class="mix-row">
-        <button class="wm-btn wm-btn--icon wm-btn--ghost" data-act="mute" data-id="${s.id}" aria-pressed="${s.props.muted}" aria-label="${s.props.muted ? 'เปิดเสียง' : 'ปิดเสียง'} ${esc(s.name)}">${icon(s.props.muted ? 'mute' : 'speaker')}</button>
+    const list = scene.sources.filter((s) => media.get(s.id)?.strip || s.kind === 'mic' || s.kind === 'audio');
+    box.innerHTML = `<h3 class="g-sub">มิกเซอร์</h3>
+      <div class="mix-row mix-row--master">
+        <button type="button" class="lim-btn" data-act="limiter" aria-pressed="${scene.limiter}" title="ลิมิตเตอร์ที่ Master กันเสียงแตกในไฟล์บันทึกและสตรีม">LIM</button>
         <div class="mix-row__main">
-          <button type="button" class="mix-row__name" data-act="select" data-id="${s.id}">${esc(s.name)}</button>
-          <input type="range" class="wm-slider" min="0" max="150" value="${Math.round(s.props.volume * 100)}" data-mix="${s.id}" aria-label="ระดับเสียง ${esc(s.name)}">
-          <span class="meter"><i data-meter="${s.id}"></i></span>
+          <div class="mix-row__top"><span class="mix-row__name">MASTER</span><output class="db" id="db-master">${fmtDb(scene.master)}</output></div>
+          <input type="range" class="wm-slider" min="0" max="150" value="${Math.round(scene.master * 100)}" data-prop="g:master" data-div="100" data-unit="dB" aria-label="ระดับเสียง Master">
+          ${meterHtml('master')}
+          <div class="lufs" id="lufs">M <b data-lufs="m">−∞</b> · S <b data-lufs="s">−∞</b> · I <b data-lufs="i">−∞</b> LUFS
+            <button type="button" class="lufs__reset" data-act="lufs-reset" title="เริ่มวัดค่า Integrated ใหม่">รีเซ็ต</button></div>
         </div>
-      </div>`).join('') : '<p class="wm-note">ยังไม่มีแหล่งเสียง เพิ่มไมค์หรือไฟล์วิดีโอที่มีเสียง</p>'}`;
+      </div>
+      ${list.length ? list.map((s) => `
+      <div class="mix-row">
+        <div class="mix-row__btns">
+          <button class="wm-btn wm-btn--icon wm-btn--ghost" data-act="mute" data-id="${s.id}" aria-pressed="${s.props.muted}" aria-label="${s.props.muted ? 'เปิดเสียง' : 'ปิดเสียง'} ${esc(s.name)}">${icon(s.props.muted ? 'mute' : 'speaker')}</button>
+          <button type="button" class="mon-btn" data-act="mon" data-id="${s.id}" aria-pressed="${s.props.mon}" aria-label="ฟัง ${esc(s.name)} ในหูฟัง" title="ฟังช่องนี้ในหูฟัง (MON)">MON</button>
+        </div>
+        <div class="mix-row__main">
+          <div class="mix-row__top"><button type="button" class="mix-row__name" data-act="select" data-id="${s.id}">${esc(s.name)}</button><output class="db" data-db="${s.id}">${fmtDb(s.props.volume)}</output></div>
+          <input type="range" class="wm-slider" min="0" max="150" value="${Math.round(s.props.volume * 100)}" data-mix="${s.id}" aria-label="ระดับเสียง ${esc(s.name)}">
+          ${meterHtml(s.id)}
+        </div>
+      </div>`).join('') : '<p class="wm-note">ยังไม่มีแหล่งเสียง เพิ่มไมค์หรือไฟล์วิดีโอที่มีเสียง</p>'}
+      <p class="wm-note">มิเตอร์เป็น dBFS: เขียว = ปกติ, อำพัน = สูงกว่า −6, แดง = ใกล้แตก · MON ฟังเฉพาะช่องที่เลือกในหูฟัง</p>`;
   } else if (ui.cat === 'comment') {
     box.innerHTML = '<p class="wm-note g-note">รุ่น Lite พิมพ์คอมเมนต์เองได้ การดึงคอมเมนต์จาก YouTube หรือ Facebook อัตโนมัติต้องเชื่อมบัญชีผ่าน gateway</p>';
   } else if (ui.cat === 'effect') {
@@ -826,6 +848,13 @@ function renderGalleryExtra(): void {
   } else if (ui.cat === 'live') {
     box.innerHTML = '<p class="wm-note g-note">เบราว์เซอร์ส่ง RTMP หรือ SRT เองไม่ได้ ต้องต่อผ่าน gateway ระหว่างนี้ใช้ปุ่มบันทึกเก็บไฟล์ได้</p>';
   } else box.innerHTML = '';
+}
+
+const fmtDb = (v: number) => (v <= 0.0001 ? '−∞ dB' : `${(20 * Math.log10(v)).toFixed(1)} dB`);
+const fmtLufs = (v: number) => (Number.isFinite(v) ? v.toFixed(1) : '−∞');
+
+function meterHtml(id: string, wide = false): string {
+  return `<span class="meter${wide ? ' meter--wide' : ''}" data-meterbox="${id}"><i data-meter="${id}"></i><b class="meter__peak" data-peak="${id}"></b></span>`;
 }
 
 function cardHtml(s: Source, i: number): string {
@@ -901,7 +930,7 @@ function tallyChip(s?: Source): string {
   return '<span id="insp-chip"></span>';
 }
 
-const fmt = (v: number, unit: string) => (unit === 's' ? `${(v / 1000).toFixed(1)}s` : `${Math.round(v)}${unit}`);
+const fmt = (v: number, unit: string) => (unit === 's' ? `${(v / 1000).toFixed(1)}s` : unit === 'dB' ? fmtDb(v / 100) : `${Math.round(v)}${unit}`);
 
 function rangeField(prop: string, label: string, value: number, min: number, max: number, div = 100, unit = '%', step = 1): string {
   const v = Math.round(value * div);
@@ -936,7 +965,7 @@ function tabsFor(s: Source): string[] {
   if (s.kind === 'score') return ['คะแนน', 'ภาพ', 'ข้อมูล'];
   const t = ['ภาพ'];
   if (s.kind === 'video' || s.kind === 'playlist') t.push('เล่น');
-  if (media.get(s.id)?.gain) t.push('เสียง');
+  if (media.get(s.id)?.strip) t.push('เสียง');
   t.push('เอฟเฟกต์');
   return t;
 }
@@ -1068,10 +1097,21 @@ function inspectorBody(s: Source): string {
   if (tab === 'เสียง') {
     return `
       ${switchRow('p:muted', 'ปิดเสียง', p.muted)}
-      ${rangeField('p:volume', 'ระดับเสียง', p.volume, 0, 150)}
-      <div class="wm-field"><span>ระดับสัญญาณ</span><span class="meter meter--wide"><i data-meter="${s.id}"></i></span></div>
+      ${rangeField('p:volume', 'ระดับเสียง', p.volume, 0, 150, 100, 'dB')}
+      <div class="wm-field"><span>ระดับสัญญาณ (dBFS)</span>${meterHtml(s.id, true)}</div>
+      ${switchRow('p:mon', 'ฟังในหูฟัง (MON)', p.mon)}
+      ${switchRow('p:gate', 'Noise gate ตัดเสียงรบกวนตอนไม่พูด', p.gate)}
+      ${p.gate ? rangeField('p:gateDb', 'ระดับเปิด gate', p.gateDb, -80, -10, 1, ' dB') : ''}
       ${advanced(`
         ${isVisual(s.kind) ? switchRow('p:afv', 'เปิดเสียงเฉพาะตอนออกอากาศ (AFV)', p.afv) : ''}
+        ${rangeField('p:pan', 'ซ้าย / ขวา', p.pan, -100, 100, 100, '')}
+        ${switchRow('p:lowcut', 'ตัดเสียงทุ้มต่ำกว่า 80 Hz', p.lowcut)}
+        ${rangeField('p:eqLow', 'EQ ทุ้ม (120 Hz)', p.eqLow, -12, 12, 1, ' dB')}
+        ${rangeField('p:eqMid', 'EQ กลาง (1 kHz)', p.eqMid, -12, 12, 1, ' dB')}
+        ${rangeField('p:eqHigh', 'EQ แหลม (8 kHz)', p.eqHigh, -12, 12, 1, ' dB')}
+        ${switchRow('p:comp', 'คอมเพรสเซอร์ (4:1)', p.comp)}
+        ${p.comp ? rangeField('p:compDb', 'ระดับเริ่มบีบ', p.compDb, -50, 0, 1, ' dB') : ''}
+        ${rangeField('p:delay', 'หน่วงเสียงให้ตรงปาก', p.delay, 0, 1000, 1, ' ms', 10)}
         ${textField('n:name', 'ชื่อ', s.name)}`)}`;
   }
   if (tab === 'เล่น') {
@@ -1137,7 +1177,7 @@ function renderInspector(): void {
       <div class="wm-insp__body">
         ${textField('g:projectName', 'ชื่อโปรเจกต์', scene.projectName)}
         ${rangeField('g:duration', 'ระยะเวลา AUTO', scene.duration, 200, 3000, 1, 's', 100)}
-        ${rangeField('g:master', 'ระดับเสียงรวม', scene.master, 0, 150)}
+        ${rangeField('g:master', 'ระดับเสียงรวม', scene.master, 0, 150, 100, 'dB')}
         ${segField('g:resolution', 'ความละเอียดเอาต์พุต', [['720p', '720p'], ['1080p', '1080p'], ['2160p', '4K']], scene.resolution)}
         ${segField('g:fps', 'เฟรมเรต', [['30', '30 fps'], ['60', '60 fps']], String(scene.fps), true)}
         ${switchRow('ftb', 'จอดำ (FTB)', !!ftb.target)}
@@ -1149,6 +1189,10 @@ function renderInspector(): void {
         </div></div>
         ${advanced(`
           ${switchRow('g:monitor', 'ฟังเสียงมอนิเตอร์ที่เครื่องนี้', scene.monitor)}
+          ${switchRow('g:limiter', 'ลิมิตเตอร์ที่ Master (กันเสียงแตก)', scene.limiter)}
+          <label class="wm-field"><span>ลำโพง / หูฟังสำหรับฟังเสียง</span><select class="wm-input" data-sink="1" ${canPickOutput() ? '' : 'disabled'}>
+            <option value="">${canPickOutput() ? 'ค่าเริ่มต้นของเครื่อง' : 'เบราว์เซอร์นี้เลือกไม่ได้'}</option>
+            ${ui.outputs.map((d) => `<option value="${esc(d.deviceId)}" ${d.deviceId === scene.sinkId ? 'selected' : ''}>${esc(d.label || 'อุปกรณ์เสียง')}</option>`).join('')}</select></label>
           <p class="wm-note">เปิดเมื่อใส่หูฟังเท่านั้น เพื่อไม่ให้เสียงหอน</p>`)}
         ${scene.resolution === '2160p' ? '<p class="wm-note">4K ต้องใช้เครื่องแรง (CPU 8 คอร์หรือการ์ดจอแยก) ถ้าภาพกระตุกให้ลดเป็น 1080p</p>' : ''}
         <p class="wm-note">แตะการ์ดในแถบล่างเพื่อปรับค่าแหล่งภาพนั้น</p>
@@ -1434,6 +1478,40 @@ let lastThumb = 0;
 let lastChip = 0;
 let lastFrame = performance.now();
 let lastPoll = 0;
+let lastLufs = 0;
+
+const peakHold = new Map<string, { db: number; t: number }>();
+
+function paintMeters(now: number): void {
+  const mm = masterMeter();
+  const chip = document.getElementById('meter-master');
+  if (chip) chip.style.width = `${bar(mm.rms) * 100}%`;
+  const read = (id: string) => (id === 'master' ? mm : meter(media.get(id)?.strip?.analyser));
+  document.querySelectorAll<HTMLElement>('[data-meterbox]').forEach((box) => {
+    const id = box.dataset.meterbox!;
+    const { peak, rms } = read(id);
+    const hold = peakHold.get(id);
+    // hold the peak 1.5 s, then let it fall 20 dB/s
+    const held = !hold || peak >= hold.db ? { db: peak, t: now } : now - hold.t < 1500 ? hold : { db: Math.max(peak, hold.db - ((now - hold.t - 1500) / 1000) * 20), t: hold.t };
+    peakHold.set(id, held);
+    (box.firstElementChild as HTMLElement).style.width = `${bar(rms) * 100}%`;
+    (box.lastElementChild as HTMLElement).style.left = `${bar(held.db) * 100}%`;
+    box.classList.toggle('is-hot', held.db > -6);
+    box.classList.toggle('is-clip', held.db > -0.5);
+    box.dataset.db = Number.isFinite(peak) ? peak.toFixed(1) : '-inf';
+  });
+  if (now - lastLufs > 250) {
+    lastLufs = now;
+    const l = loudness();
+    const chipL = document.getElementById('chip-lufs');
+    if (chipL) chipL.textContent = `${fmtLufs(l.s)} LUFS`;
+    document.querySelectorAll<HTMLElement>('[data-lufs]').forEach((el) => {
+      el.textContent = fmtLufs(l[el.dataset.lufs as 'm' | 's' | 'i']);
+    });
+    const lim = document.querySelector<HTMLElement>('.lim-btn');
+    lim?.classList.toggle('is-active', limiterReduction() < -0.5);
+  }
+}
 
 function renderTransport(): void {
   const el = media.get(ui.selected ?? '')?.el;
@@ -1465,7 +1543,7 @@ function frame(now: number): void {
   const ls = layers(now);
   drawBus(pgmCtx, scene, scene.pgm, trans, now, ftb.level, ls);
   drawBus(pvwCtx, scene, scene.pvw, null, now, 0, ls);
-  updateGains(scene, onAir);
+  updateAudio(scene, onAir);
   paintWindows(pgmCtx.canvas, pvwCtx.canvas, scene, now);
 
   if (now - lastThumb > 200) {
@@ -1479,11 +1557,7 @@ function frame(now: number): void {
       drawSource(ctx, s, cv.width, cv.height);
     });
   }
-  const m = document.getElementById('meter-master');
-  if (m) m.style.width = `${masterLevel() * 100}%`;
-  document.querySelectorAll<HTMLElement>('[data-meter]').forEach((el) => {
-    el.style.width = `${level(media.get(el.dataset.meter!)?.analyser) * 100}%`;
-  });
+  paintMeters(now);
   if (now - lastPoll > 1000) {
     lastPoll = now;
     pollData();
@@ -1741,7 +1815,7 @@ const actions: Record<string, (el: HTMLElement, e: MouseEvent) => void> = {
   },
   delete: () => ui.selected && removeSource(ui.selected),
   deselect: () => {
-    ui.selected = null;
+    select(null);
     renderInspector();
     renderTally();
   },
@@ -1753,6 +1827,23 @@ const actions: Record<string, (el: HTMLElement, e: MouseEvent) => void> = {
     ui.inspOpen = true;
     renderInspector();
     document.body.classList.add('insp-open');
+  },
+  mon: (el) => {
+    const t = byId(el.dataset.id!);
+    if (!t) return;
+    ensureAudio();
+    t.props.mon = !t.props.mon;
+    changed(false);
+    renderGalleryExtra();
+    if (t.props.mon) toast(`ฟัง ${t.name} ในหูฟังแล้ว ใส่หูฟังเพื่อไม่ให้เสียงหอน`);
+  },
+  limiter: () => {
+    setProp('g:limiter', !scene.limiter, false);
+    toast(scene.limiter ? 'เปิดลิมิตเตอร์ที่ Master' : 'ปิดลิมิตเตอร์ ระวังเสียงแตกเมื่อเกิน 0 dB');
+  },
+  'lufs-reset': () => {
+    resetLoudness();
+    toast('เริ่มวัดความดัง Integrated ใหม่');
   },
   mute: (el) => {
     const id = el.dataset.id!;
@@ -1819,6 +1910,8 @@ document.addEventListener('input', (e) => {
       const s = sc.sources.find((x) => x.id === id);
       if (s) s.props.volume = Number(t.value) / 100;
     }, { coalesce: `mix@${id}`, silent: true });
+    const out = document.querySelector(`[data-db="${id}"]`);
+    if (out) out.textContent = fmtDb(Number(t.value) / 100);
     return;
   }
   const prop = t.dataset.prop;
@@ -1832,6 +1925,10 @@ document.addEventListener('input', (e) => {
     setProp(prop, Number(t.value) / div, true);
     const out = t.parentElement?.querySelector('output');
     if (out) out.textContent = fmt(Number(t.value), t.dataset.unit ?? '%');
+    if (prop === 'g:master') {
+      const db = document.getElementById('db-master');
+      if (db) db.textContent = fmtDb(Number(t.value) / 100);
+    }
   } else {
     setProp(prop, t.value, true);
     if (prop.startsWith('n:') || prop === 'p:title') {
@@ -1844,6 +1941,14 @@ document.addEventListener('input', (e) => {
 
 document.addEventListener('change', (e) => {
   const t = e.target as HTMLSelectElement;
+  if (t.dataset.sink) {
+    void setOutputDevice(t.value).then((ok) => {
+      if (!ok) return toast('เปลี่ยนลำโพงไม่ได้ ใช้ค่าเริ่มต้นของเครื่อง');
+      setProp('g:sinkId', t.value, false);
+      toast('เปลี่ยนอุปกรณ์ฟังเสียงแล้ว');
+    });
+    return;
+  }
   const id = ui.selected;
   if (!t.dataset.ovl || !id) return;
   if (t.dataset.ovl === 'ch') {
@@ -1960,6 +2065,7 @@ document.querySelectorAll<HTMLElement>('[data-drop]').forEach((zone) => {
 renderTop();
 renderAll();
 for (const s of scene.sources) ensureMedia(s, true);
+if (scene.sinkId) void setOutputDevice(scene.sinkId);
 void refreshDevices();
 navigator.mediaDevices?.addEventListener?.('devicechange', () => void refreshDevices());
 requestAnimationFrame(frame);

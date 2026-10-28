@@ -2,15 +2,13 @@
 // Every colour drawn on a canvas is read from the design tokens (tokens.css).
 import type { OverlayFx, Scene, Source, Tone } from './scene';
 import { createKeyer, type Keyer } from './keyer';
+import type { Strip } from './audio';
 
 export interface Media {
   el?: HTMLVideoElement | HTMLAudioElement | HTMLImageElement;
   stream?: MediaStream;
   url?: string;
-  input?: AudioNode;
-  gain?: GainNode;
-  analyser?: AnalyserNode;
-  lastGain?: number;
+  strip?: Strip;
   /** playlist files and the one now loaded */
   list?: { url: string; name: string }[];
   index?: number;
@@ -102,8 +100,8 @@ export function release(id: string): void {
   if (m.url) URL.revokeObjectURL(m.url);
   m.list?.forEach((f) => URL.revokeObjectURL(f.url));
   try {
-    m.input?.disconnect();
-    m.gain?.disconnect();
+    m.strip?.input.disconnect();
+    m.strip?.fader.disconnect();
   } catch { /* already disconnected */ }
   media.delete(id);
 }
@@ -112,82 +110,6 @@ function ready(el: Media['el']): el is HTMLVideoElement | HTMLImageElement {
   if (el instanceof HTMLVideoElement) return el.readyState >= 2 && el.videoWidth > 0;
   if (el instanceof HTMLImageElement) return el.complete && el.naturalWidth > 0;
   return false;
-}
-
-/* ---------- audio ---------- */
-
-let ac: AudioContext | null = null;
-let masterGain: GainNode;
-let monitorGain: GainNode;
-let masterAnalyser: AnalyserNode;
-let recDest: MediaStreamAudioDestinationNode;
-
-export function ensureAudio(): AudioContext {
-  if (!ac) {
-    ac = new AudioContext();
-    masterGain = ac.createGain();
-    monitorGain = ac.createGain();
-    monitorGain.gain.value = 0;
-    masterAnalyser = ac.createAnalyser();
-    masterAnalyser.fftSize = 1024;
-    recDest = ac.createMediaStreamDestination();
-    masterGain.connect(masterAnalyser);
-    masterGain.connect(recDest);
-    masterGain.connect(monitorGain).connect(ac.destination);
-  }
-  if (ac.state === 'suspended') void ac.resume();
-  return ac;
-}
-
-function wire(m: Media, node: AudioNode): void {
-  const ctx = ensureAudio();
-  const g = ctx.createGain();
-  const an = ctx.createAnalyser();
-  an.fftSize = 1024;
-  node.connect(g);
-  g.connect(an);
-  g.connect(masterGain);
-  m.input = node;
-  m.gain = g;
-  m.analyser = an;
-}
-
-export function attachStreamAudio(m: Media, stream: MediaStream): void {
-  if (!stream.getAudioTracks().length) return;
-  wire(m, ensureAudio().createMediaStreamSource(stream));
-}
-
-export function attachElementAudio(m: Media, el: HTMLMediaElement): void {
-  wire(m, ensureAudio().createMediaElementSource(el));
-}
-
-const buf = new Float32Array(1024);
-export function level(an?: AnalyserNode): number {
-  if (!an) return 0;
-  an.getFloatTimeDomainData(buf);
-  let sum = 0;
-  for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
-  const db = 20 * Math.log10(Math.sqrt(sum / buf.length) || 1e-6);
-  return Math.min(1, Math.max(0, (db + 60) / 60));
-}
-
-export const masterLevel = () => (ac ? level(masterAnalyser) : 0);
-
-export function updateGains(scene: Scene, onAir: (id: string) => boolean): void {
-  if (!ac) return;
-  const now = ac.currentTime;
-  for (const s of scene.sources) {
-    const m = media.get(s.id);
-    if (!m?.gain) continue;
-    const p = s.props;
-    const target = p.muted ? 0 : p.volume * (p.afv && !onAir(s.id) ? 0 : 1);
-    if (m.lastGain !== target) {
-      m.gain.gain.setTargetAtTime(target, now, 0.03);
-      m.lastGain = target;
-    }
-  }
-  masterGain.gain.setTargetAtTime(scene.master, now, 0.03);
-  monitorGain.gain.setTargetAtTime(scene.monitor ? 1 : 0, now, 0.03);
 }
 
 /* ---------- drawing ---------- */
@@ -651,43 +573,5 @@ export function drawBus(
     ctx.fillStyle = tk('card-ground');
     ctx.fillRect(0, 0, W, H);
     ctx.globalAlpha = 1;
-  }
-}
-
-/* ---------- recording ---------- */
-
-function pickMime(): string {
-  const options = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4'];
-  return options.find((m) => MediaRecorder.isTypeSupported(m)) ?? '';
-}
-
-export class Recorder {
-  private rec: MediaRecorder;
-  private chunks: Blob[] = [];
-  readonly started = performance.now();
-
-  constructor(canvas: HTMLCanvasElement, fps = 30) {
-    ensureAudio();
-    const video = canvas.captureStream(fps);
-    const px = canvas.width * canvas.height;
-    const bitrate = Math.round((px >= 3840 * 2160 ? 35e6 : px >= 1920 * 1080 ? 10e6 : 6e6) * (fps > 30 ? 1.5 : 1));
-    const stream = new MediaStream([...video.getVideoTracks(), ...recDest.stream.getAudioTracks()]);
-    const mimeType = pickMime();
-    this.rec = new MediaRecorder(stream, mimeType ? { mimeType, videoBitsPerSecond: bitrate } : undefined);
-    this.rec.ondataavailable = (e) => {
-      if (e.data.size) this.chunks.push(e.data);
-    };
-    this.rec.start(1000);
-  }
-
-  get mime(): string {
-    return this.rec.mimeType || 'video/webm';
-  }
-
-  stop(): Promise<Blob> {
-    return new Promise((resolve) => {
-      this.rec.onstop = () => resolve(new Blob(this.chunks, { type: this.mime }));
-      this.rec.stop();
-    });
   }
 }

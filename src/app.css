@@ -69,8 +69,26 @@ button, input { font: inherit; color: inherit; }
 .mix-row__main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--space-1); }
 .mix-row__name { background: none; border: 0; padding: 0; text-align: left; font: 600 13px/18px var(--font-sans); color: var(--text); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mix-row__name:hover { color: var(--accent-text); }
-.meter { display: block; height: 4px; border-radius: var(--radius-pill); background: var(--panel-3); overflow: hidden; }
-.meter--wide { height: 8px; }
+.meter { display: block; position: relative; height: 6px; border-radius: var(--radius-pill); background: var(--panel-3); overflow: hidden; }
+.meter--wide { height: 10px; }
+.meter.is-hot i { background: var(--amber); }
+.meter.is-clip i { background: var(--pgm); }
+.meter__peak { position: absolute; top: 0; bottom: 0; left: 0; width: 2px; margin-left: -2px; background: var(--text); }
+.meter.is-clip .meter__peak { background: var(--pgm); }
+.mix-row__top { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.mix-row__btns { display: flex; flex-direction: column; align-items: center; gap: var(--space-1); }
+.mix-row--master { border-top: 0; padding-top: 0; }
+.db { font: 700 12px/16px var(--font-mono); color: var(--muted); white-space: nowrap; }
+.mon-btn, .lim-btn { min-width: var(--control-md); height: var(--control-sm); padding: 0 var(--space-1); border-radius: var(--radius-xs); border: 1px solid var(--line-2); background: var(--panel-2); color: var(--muted); font: 700 11px/14px var(--font-mono); letter-spacing: .06em; cursor: pointer; }
+.mon-btn:hover, .lim-btn:hover { color: var(--text); border-color: var(--line-strong); }
+.mon-btn[aria-pressed="true"] { background: var(--amber); border-color: var(--amber); color: var(--on-amber); }
+.lim-btn[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent-text); }
+.lim-btn.is-active { background: var(--pgm-fill); border-color: var(--pgm); color: var(--on-accent); }
+.mon-btn:focus-visible, .lim-btn:focus-visible, .lufs__reset:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.lufs { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-1); font: 500 12px/16px var(--font-sans); color: var(--muted); }
+.lufs b { font: 700 12px/16px var(--font-mono); color: var(--text); }
+.lufs__reset { margin-left: auto; background: none; border: 0; padding: 0 var(--space-1); color: var(--accent-text); font: 600 12px/16px var(--font-sans); cursor: pointer; }
+.chip-audio b { min-width: 72px; }
 
 /* ---------- stage ---------- */
 .mons { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); }
@@ -198,6 +216,7 @@ select.wm-input { padding-right: var(--space-2); cursor: pointer; }
   .sw-row { min-height: var(--control-lg); }
   .pl-item { min-height: var(--control-lg); }
   .ovl-btn, .preset__del { width: var(--control-lg); height: var(--control-lg); }
+  .mon-btn, .lim-btn, .lufs__reset { min-height: var(--control-lg); }
   .wm-textarea { height: auto; }
   .wm-disclose { min-height: var(--control-lg); }
   .wm-slider { height: var(--control-lg); }

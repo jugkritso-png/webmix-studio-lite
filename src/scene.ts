@@ -72,6 +72,18 @@ export interface Props {
   dataUrl: string;
   dataHeader: boolean;
   dataRow: number;
+  /** audio strip */
+  pan: number;
+  gate: boolean;
+  gateDb: number;
+  lowcut: boolean;
+  eqLow: number;
+  eqMid: number;
+  eqHigh: number;
+  comp: boolean;
+  compDb: number;
+  delay: number;
+  mon: boolean;
 }
 
 export interface Source {
@@ -96,6 +108,9 @@ export interface Scene {
   fps: 30 | 60;
   monitor: boolean;
   master: number;
+  limiter: boolean;
+  /** headphone / speaker output for monitoring ('' = system default) */
+  sinkId: string;
   overlays: Overlay[];
 }
 
@@ -119,6 +134,7 @@ export function defaultProps(): Props {
     timerMode: 'down', timerDur: 300_000, timerStart: 0, timerAcc: 0,
     teamA: 'ทีม A', teamB: 'ทีม B', scoreA: 0, scoreB: 0, period: '', colorA: '', colorB: '',
     dataUrl: '', dataHeader: true, dataRow: 0,
+    pan: 0, gate: false, gateDb: -50, lowcut: false, eqLow: 0, eqMid: 0, eqHigh: 0, comp: false, compDb: -24, delay: 0, mon: false,
   };
 }
 
@@ -129,7 +145,7 @@ export function emptyOverlays(): Overlay[] {
 export function defaultScene(): Scene {
   return {
     v: 1, projectName: 'โชว์ใหม่', sources: [], pvw: null, pgm: null,
-    transition: 'mix', duration: 500, resolution: '720p', fps: 30, monitor: false, master: 1,
+    transition: 'mix', duration: 500, resolution: '720p', fps: 30, monitor: false, master: 1, limiter: true, sinkId: '',
     overlays: emptyOverlays(),
   };
 }
