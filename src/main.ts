@@ -8,9 +8,13 @@ import {
 } from './scene';
 import { fetchRows, REFRESH_MS } from './data';
 import {
-  attachElementAudio, attachStreamAudio, bar, canPickOutput, ensureAudio, limiterReduction, loudness, masterMeter, meter,
-  outputDevices, resetLoudness, setOutputDevice, updateAudio,
+  attachElementAudio, attachStreamAudio, bar, canPickOutput, dropMixMinus, ensureAudio, limiterReduction, loudness, masterMeter, meter,
+  mixMinus, outputDevices, releaseStrip, resetLoudness, setOutputDevice, updateAudio,
 } from './audio';
+import qrcode from 'qrcode-generator';
+import { createLivePanel } from './livepanel';
+import { signalFromGateway, signalFromLocation, Studio, type Caller, type RemoteKind } from './remote';
+import type { Platform } from './stream';
 import { Recorder } from './recorder';
 import {
   audioForUrl, drawBus, drawSource, imageFor,
@@ -361,10 +365,11 @@ async function autoReconnect(s: Source): Promise<void> {
 async function reconnect(id: string): Promise<void> {
   const s = byId(id);
   if (!s) return;
+  if (s.kind === 'remote') return openRemote(s.meta === 'แขกทางไกล' ? 'guest' : 'phone', s.name);
   try {
     const got = await acquire(s.kind, s.deviceId, s.props.res).catch((e) => (s.deviceId ? acquire(s.kind, undefined, s.props.res) : Promise.reject(e)));
     if (!got) return;
-    release(id);
+    free(id);
     media.set(id, got.m);
     wirePlayback(id, got.m);
     mutate((sc) => {
@@ -446,8 +451,18 @@ function removeSource(id: string): void {
   renderInspector();
   // keep the live media around while undo is likely, then let it go
   window.setTimeout(() => {
-    if (!byId(id)) release(id);
+    if (!byId(id)) free(id);
   }, 8000);
+}
+
+/** let go of a source's live media, audio strip and any guest return feed */
+function free(id: string): void {
+  const m = media.get(id);
+  if (m) releaseStrip(m);
+  release(id);
+  dropMixMinus(id);
+  const s = scene.sources.find((x) => x.id === id);
+  if (s?.kind === 'remote' && s.deviceId) studio?.hangUp(s.deviceId);
 }
 
 /* ================= switching ================= */
@@ -635,6 +650,8 @@ function tilesFor(cat: Cat): Tile[] {
           run: (t) => addMedia('camera', d.label || 'กล้อง', t, d.deviceId),
         })),
         { id: 'screen', name: 'แชร์หน้าจอ', badge: 'SCR', filter: 'หน้าจอ', ph: 'b', run: (t) => addMedia('screen', 'หน้าจอ', t) },
+        { id: 'phone', name: 'กล้องมือถือ (QR)', badge: 'QR', filter: 'กล้อง', ph: 'a', run: () => openRemote('phone') },
+        { id: 'guest', name: 'แขกรับเชิญทางไกล', badge: 'CALL', filter: 'กล้อง', ph: 'b', run: () => openRemote('guest') },
         { id: 'video', name: 'ไฟล์วิดีโอ', badge: 'MP4', filter: 'ไฟล์', ph: 'c', run: (t) => addMedia('video', 'วิดีโอ', t) },
         { id: 'playlist', name: 'เพลย์ลิสต์วิดีโอ', badge: 'LIST', filter: 'ไฟล์', ph: 'c', run: (t) => addMedia('playlist', 'เพลย์ลิสต์', t) },
         { id: 'image', name: 'รูปภาพ', badge: 'IMG', filter: 'ไฟล์', ph: 'b', run: (t) => addMedia('image', 'รูปภาพ', t) },
@@ -695,6 +712,7 @@ function tilesFor(cat: Cat): Tile[] {
       return [
         { id: 'l-yt', name: 'YouTube', badge: 'RTMP', filter: '', ph: 'a', run: () => openLive('youtube') },
         { id: 'l-fb', name: 'Facebook', badge: 'RTMPS', filter: '', ph: 'b', run: () => openLive('facebook') },
+        { id: 'l-tw', name: 'Twitch', badge: 'RTMP', filter: '', ph: 'a', run: () => openLive('twitch') },
         { id: 'l-rtmp', name: 'RTMP อื่น ๆ', badge: 'RTMP', filter: '', ph: 'c', run: () => openLive('rtmp') },
         { id: 'l-srt', name: 'SRT', badge: 'SRT', filter: '', ph: 'c', run: () => openLive('srt') },
       ];
@@ -703,7 +721,7 @@ function tilesFor(cat: Cat): Tile[] {
 
 function newTileAction(cat: Cat): void {
   if (cat === 'effect') return applyEffect('');
-  if (cat === 'live') return openLive('youtube');
+  if (cat === 'live') return openLive();
   if (cat === 'text') return void tilesFor('text')[0].run();
   if (cat === 'comment') return void tilesFor('comment')[0].run();
   if (cat === 'graphic') return void tilesFor('graphic')[2].run();
@@ -767,11 +785,17 @@ function renderChips(): void {
   $('#chips').innerHTML = `
     ${ftb.target ? '<span class="wm-chip wm-chip--warn" id="chip-ftb"><span class="wm-dot"></span>FTB จอดำ</span>'
       : `<span class="wm-chip chip-res">${RES_LABEL[scene.resolution]} <b>${scene.fps}</b></span>`}
-    <span class="wm-chip chip-audio" title="ความดังระยะสั้น (LUFS)">เสียง <b id="chip-lufs">−∞</b><span class="mini-meter"><i id="meter-master"></i></span></span>
+    ${livePanel.live ? `<span class="wm-chip wm-chip--live" id="chip-live"><span class="wm-dot"></span>LIVE <b>${livePanel.liveCount()}</b> ปลายทาง</span>`
+      : '<span class="wm-chip chip-audio" title="ความดังระยะสั้น (LUFS)">เสียง <b id="chip-lufs">−∞</b><span class="mini-meter"><i id="meter-master"></i></span></span>'}
     ${rec ? `<span class="wm-chip wm-chip--warn" id="chip-rec"><span class="wm-dot"></span>REC <b id="rec-time">${fmtTime(performance.now() - rec.started)}</b></span>` : ''}`;
   const btn = $('#btn-rec');
   btn.innerHTML = rec ? `${icon('stop')}<span>หยุดบันทึก</span>` : `${icon('rec')}<span>บันทึก</span>`;
   btn.setAttribute('aria-pressed', String(!!rec));
+  const live = $('#btn-live');
+  const on = livePanel.live;
+  live.className = `wm-btn ${on ? 'wm-btn--live' : 'wm-btn--primary'}`;
+  const since = livePanel.streamer?.startedAt;
+  live.innerHTML = on ? `<span class="wm-dot"></span><span>LIVE <span id="live-time">${since ? fmtTime(Date.now() - since) : '00:00:00'}</span></span>` : `${icon('live')}<span>ไลฟ์</span>`;
 }
 
 function renderRail(): void {
@@ -846,7 +870,7 @@ function renderGalleryExtra(): void {
   } else if (ui.cat === 'effect') {
     box.innerHTML = '<p class="wm-note g-note">แตะเพื่อใส่ให้แหล่งภาพที่เลือก หรือลากไปวางบนจอ PVW / PGM</p>';
   } else if (ui.cat === 'live') {
-    box.innerHTML = '<p class="wm-note g-note">เบราว์เซอร์ส่ง RTMP หรือ SRT เองไม่ได้ ต้องต่อผ่าน gateway ระหว่างนี้ใช้ปุ่มบันทึกเก็บไฟล์ได้</p>';
+    box.innerHTML = '<p class="wm-note g-note">ส่งพร้อมกันได้สูงสุด 6 ปลายทางผ่าน Stream Gateway ตัวเดียวกับ WebMix Pro (YouTube, Facebook, Twitch, RTMP, SRT)</p>';
   } else box.innerHTML = '';
 }
 
@@ -1320,6 +1344,7 @@ const dlg = () => $<HTMLDialogElement>('#dlg');
 
 function openDialog(title: string, body: string, foot: string): HTMLDialogElement {
   const d = dlg();
+  d.oninput = d.onchange = d.onclick = null;
   d.innerHTML = `<form method="dialog" class="dlg__box">
     <div class="dlg__head"><h2 class="title">${title}</h2><button class="wm-btn wm-btn--icon wm-btn--ghost" value="close" aria-label="ปิด">${icon('close')}</button></div>
     <div class="dlg__body">${body}</div>
@@ -1361,48 +1386,148 @@ function openPipChooser(): void {
   }));
 }
 
-const DESTS: Record<string, { label: string; url: string; hint: string }> = {
-  youtube: { label: 'YouTube', url: 'rtmp://a.rtmp.youtube.com/live2', hint: 'คัดลอก Stream key จาก YouTube Studio → ถ่ายทอดสด' },
-  facebook: { label: 'Facebook', url: 'rtmps://live-api-s.facebook.com:443/rtmp/', hint: 'คัดลอก Stream key จาก Facebook Live Producer' },
-  rtmp: { label: 'RTMP', url: '', hint: 'ใส่ URL ของเซิร์ฟเวอร์ที่ขึ้นต้นด้วย rtmp:// หรือ rtmps://' },
-  srt: { label: 'SRT', url: '', hint: 'ใส่ URL ที่ขึ้นต้นด้วย srt:// พร้อมพอร์ต' },
-};
+const livePanel = createLivePanel({
+  openDialog,
+  closeDialog: () => dlg().close(),
+  toast: (m) => toast(m),
+  esc,
+  canvas: () => pgmCtx.canvas,
+  output: () => ({ fps: scene.fps, height: OUTPUT_SIZE[scene.resolution][1] }),
+  onChange: () => {
+    renderChips();
+    if (livePanel.gateway && studio && !studio.sig) void refreshStudioSignal();
+  },
+});
 
-function openLive(dest: string): void {
-  const draw = (cur: string) => {
-    const info = DESTS[cur];
-    const d = openDialog('ตั้งค่าปลายทางไลฟ์', `
-      <div class="wm-seg" role="group" aria-label="ปลายทาง">${Object.entries(DESTS).map(([k, v]) =>
-        `<button type="button" data-dest="${k}" aria-pressed="${k === cur}">${v.label}</button>`).join('')}</div>
-      <label class="wm-field"><span>URL เซิร์ฟเวอร์</span><input class="wm-input" id="live-url" value="${esc(info.url)}" placeholder="${cur === 'srt' ? 'srt://' : 'rtmp://'}" autocomplete="off" spellcheck="false"></label>
-      <label class="wm-field"><span>Stream key</span><span class="key-row">
-        <input class="wm-input" id="live-key" type="password" autocomplete="off" spellcheck="false" placeholder="วางคีย์ที่นี่">
-        <button type="button" class="wm-btn" id="live-show">${icon('eye')}แสดง</button></span>
-        <span class="wm-help" id="live-help">${info.hint} คีย์ไม่ถูกบันทึกในเครื่องหรือไฟล์ใด ๆ</span></label>
-      <div class="notice notice--warn"><p><b>ต้องใช้ gateway</b> เบราว์เซอร์ส่งสัญญาณ RTMP หรือ SRT ตรงไม่ได้ ต้องมีเซิร์ฟเวอร์กลางที่รับภาพจากเบราว์เซอร์ (เช่น WHIP หรือ WebSocket) แล้วส่งต่อไปยัง ${info.label} รุ่น Lite ยังไม่ส่งสัญญาณจริง ระหว่างนี้ใช้ปุ่มบันทึกเก็บไฟล์ได้</p></div>`,
-    `<button class="wm-btn" value="close">ปิด</button><button type="button" class="wm-btn wm-btn--primary" id="live-check">ตรวจการตั้งค่า</button>`);
-    d.querySelectorAll<HTMLElement>('[data-dest]').forEach((b) => b.addEventListener('click', () => draw(b.dataset.dest!)));
-    const key = $<HTMLInputElement>('#live-key', d);
-    $('#live-show', d).addEventListener('click', (e) => {
-      key.type = key.type === 'password' ? 'text' : 'password';
-      (e.currentTarget as HTMLElement).lastChild!.textContent = key.type === 'password' ? 'แสดง' : 'ซ่อน';
-    });
-    $('#live-check', d).addEventListener('click', () => {
-      const url = $<HTMLInputElement>('#live-url', d).value.trim();
-      const help = $('#live-help', d);
-      const ok = cur === 'srt' ? /^srt:\/\/[^/\s]+:\d+/.test(url) : /^rtmps?:\/\/\S+/.test(url);
-      help.classList.toggle('wm-help--err', !ok || (!key.value && cur !== 'srt'));
-      if (!ok) help.textContent = cur === 'srt' ? 'ใส่ URL ที่ขึ้นต้นด้วย srt:// และมีพอร์ต เช่น srt://host:9000' : 'ใส่ URL ที่ขึ้นต้นด้วย rtmp:// หรือ rtmps://';
-      else if (!key.value && cur !== 'srt') help.textContent = 'วาง Stream key จากแพลตฟอร์มก่อน';
-      else help.textContent = 'การตั้งค่าถูกรูปแบบแล้ว ต่อ gateway ก่อนจึงจะเริ่มไลฟ์ได้';
-    });
-  };
-  draw(DESTS[dest] ? dest : 'youtube');
-  // never keep a stream key around after the dialog closes
-  dlg().addEventListener('close', () => {
-    const key = document.getElementById('live-key') as HTMLInputElement | null;
-    if (key) key.value = '';
-  }, { once: true });
+function openLive(platform?: Platform): void {
+  livePanel.open(platform);
+}
+
+/* ================= phone cameras and remote guests ================= */
+
+let studio: Studio | null = null;
+/** clientId → PeerJS id of the device, for tally */
+const callers = new Map<string, Caller>();
+
+async function refreshStudioSignal(): Promise<void> {
+  if (!studio || !livePanel.gateway) return;
+  const sig = await signalFromGateway(livePanel.gateway);
+  if (sig && JSON.stringify(sig) !== JSON.stringify(studio.sig)) {
+    studio.destroy();
+    studio.sig = sig;
+    await studio.start();
+  }
+}
+
+function ensureStudio(): Studio {
+  if (studio) return studio;
+  studio = new Studio({
+    onStatus: () => renderRemoteDialog(),
+    returnFeed: (clientId) => {
+      const video = pgmCtx.canvas.captureStream(30).getVideoTracks();
+      const id = scene.sources.find((x) => x.kind === 'remote' && x.deviceId === clientId)?.id ?? `guest:${clientId}`;
+      return new MediaStream([...video, ...mixMinus(id).getAudioTracks()]);
+    },
+    onStream: (caller, stream) => {
+      callers.set(caller.clientId, caller);
+      const existing = scene.sources.find((x) => x.kind === 'remote' && x.deviceId === caller.clientId);
+      const m: Media = { stream, el: videoForStream(stream) };
+      if (existing) {
+        // the same phone / guest coming back: keep its card, position and settings
+        free(existing.id);
+        attachStreamAudio(m, stream, existing.id);
+        media.set(existing.id, m);
+        if (caller.name && caller.name !== existing.name) {
+          existing.name = caller.name;
+          changed(false);
+        }
+        toast(`${existing.name} เชื่อมต่อกลับมาแล้ว`);
+      } else {
+        const label = caller.kind === 'guest' ? 'แขก' : 'มือถือ';
+        const s = newSource('remote', caller.name || `${label} ${scene.sources.filter((x) => x.kind === 'remote').length + 1}`, caller.kind === 'guest' ? 'แขกทางไกล' : 'มือถือ');
+        s.deviceId = caller.clientId;
+        // a guest's return feed was built before the card existed: rebuild it under the card's id
+        dropMixMinus(`guest:${caller.clientId}`);
+        attachStreamAudio(m, stream, s.id);
+        addSource(s, m);
+      }
+      sendTally();
+      if (dlg().open && document.getElementById('remote-qr')) dlg().close();
+      renderStrip();
+    },
+    onLeave: (caller) => {
+      const s = scene.sources.find((x) => x.kind === 'remote' && x.deviceId === caller.clientId);
+      if (s) {
+        const m = media.get(s.id);
+        if (m) releaseStrip(m);
+        release(s.id);
+        toast(`${s.name} วางสายแล้ว การ์ดยังอยู่ ให้เปิดลิงก์เดิมเพื่อกลับเข้ามา`);
+        renderInspector();
+      }
+    },
+  }, signalFromLocation());
+  void studio.start();
+  if (livePanel.gateway) void refreshStudioSignal();
+  return studio;
+}
+
+let lastTally = '';
+function sendTally(): void {
+  if (!studio) return;
+  const key = JSON.stringify([scene.pgm, scene.pvw, scene.overlays.map((o) => o.on && o.src)]);
+  if (key === lastTally) return;
+  lastTally = key;
+  for (const s of scene.sources) {
+    if (s.kind !== 'remote' || !s.deviceId) continue;
+    const c = callers.get(s.deviceId);
+    if (c) studio.tally(c.peerId, onAir(s.id) ? 'pgm' : scene.pvw === s.id ? 'pvw' : 'off');
+  }
+}
+
+let remoteKind: RemoteKind = 'phone';
+let remoteName = '';
+
+function openRemote(kind: RemoteKind, name = ''): void {
+  remoteKind = kind;
+  remoteName = name;
+  ensureStudio();
+  renderRemoteDialog(true);
+}
+
+function renderRemoteDialog(force = false): void {
+  if (!force && !document.getElementById('remote-qr')) return;
+  const st = studio;
+  const ready = st?.status === 'ready';
+  const link = ready ? st.link(remoteKind, remoteName) : '';
+  let qr = '';
+  if (link) {
+    const q = qrcode(0, 'M');
+    q.addData(link);
+    q.make();
+    qr = q.createSvgTag({ cellSize: 4, margin: 2, scalable: true });
+  }
+  const guest = remoteKind === 'guest';
+  const status = !st || st.status === 'connecting' ? 'กำลังเตรียมสตูดิโอ…'
+    : st.status === 'unavailable' ? 'โหลดระบบเชื่อมต่อไม่ได้ ตรวจอินเทอร์เน็ตแล้วลองอีกครั้ง'
+      : st.status === 'offline' ? 'เชื่อมต่อเซิร์ฟเวอร์จับคู่ไม่ได้ ตรวจอินเทอร์เน็ตแล้วลองอีกครั้ง'
+        : guest ? 'ส่งลิงก์ให้แขกทาง LINE หรืออีเมล แขกจะเห็นและได้ยินรายการ (ไม่ได้ยินเสียงตัวเอง)' : 'สแกน QR ด้วยมือถือ แล้วกดเชื่อมต่อ ภาพจะขึ้นเป็นการ์ดใหม่';
+  const body = `<div class="remote" id="remote-qr">
+      ${guest ? `<label class="wm-field"><span>ชื่อแขก</span><input class="wm-input" id="guest-name" value="${esc(remoteName)}" placeholder="เช่น คุณสมชาย" autocomplete="off"></label>` : ''}
+      <div class="remote__qr" aria-label="QR Code สำหรับเชื่อมต่อ">${qr || '<span class="wm-note">รอสักครู่…</span>'}</div>
+      <div class="key-row"><input class="wm-input" id="remote-link" readonly value="${esc(link)}" aria-label="ลิงก์เชื่อมต่อ">
+        <button type="button" class="wm-btn" id="remote-copy" ${link ? '' : 'disabled'}>คัดลอก</button></div>
+      <p class="wm-help ${st && ['offline', 'unavailable'].includes(st.status) ? 'wm-help--err' : ''}" id="remote-status">${status}</p>
+      <p class="wm-note">ไม่มี Stream Gateway ใช้ระบบจับคู่สาธารณะของ PeerJS ได้กับ Wi-Fi ส่วนใหญ่ ถ้ามือถือใช้ 4G / 5G แล้วต่อไม่ติด ให้ตั้ง Gateway (มี TURN) ในหน้าไลฟ์</p>
+    </div>`;
+  const d = openDialog(guest ? 'เชิญแขกทางไกล' : 'เพิ่มกล้องมือถือ', body, '<button class="wm-btn" value="close">ปิด</button>');
+  d.querySelector('#remote-copy')?.addEventListener('click', () => {
+    const v = (d.querySelector('#remote-link') as HTMLInputElement).value;
+    void navigator.clipboard?.writeText(v).then(() => toast('คัดลอกลิงก์แล้ว'), () => toast('คัดลอกไม่ได้ กดค้างที่ลิงก์เพื่อคัดลอกเอง'));
+  });
+  d.querySelector('#guest-name')?.addEventListener('change', (e) => {
+    remoteName = (e.target as HTMLInputElement).value.trim();
+    renderRemoteDialog();
+  });
 }
 
 function openSettings(): void {
@@ -1431,7 +1556,7 @@ function openSettings(): void {
     }, { toast: 'ล้างฉากแล้ว' });
     ui.selected = null;
     renderInspector();
-    window.setTimeout(() => ids.forEach((id) => !byId(id) && release(id)), 8000);
+    window.setTimeout(() => ids.forEach((id) => !byId(id) && free(id)), 8000);
   });
 }
 
@@ -1479,6 +1604,7 @@ let lastChip = 0;
 let lastFrame = performance.now();
 let lastPoll = 0;
 let lastLufs = 0;
+let lastLiveTick = 0;
 
 const peakHold = new Map<string, { db: number; t: number }>();
 
@@ -1565,6 +1691,13 @@ function frame(now: number): void {
     const ts = byId(ui.selected);
     if (tv && ts?.kind === 'timer') tv.textContent = fmtClock(timerValue(ts));
   }
+  if (now - lastLiveTick > 1000) {
+    lastLiveTick = now;
+    const t = document.getElementById('live-time');
+    const since = livePanel.streamer?.startedAt;
+    if (t && since) t.textContent = fmtTime(Date.now() - since);
+    sendTally();
+  }
   if (ui.recorder && now - lastChip > 500) {
     lastChip = now;
     const t = document.getElementById('rec-time');
@@ -1607,7 +1740,7 @@ const actions: Record<string, (el: HTMLElement, e: MouseEvent) => void> = {
   redo,
   settings: openSettings,
   record: () => void toggleRecord(),
-  live: () => openLive('youtube'),
+  live: () => openLive(),
   cut,
   auto,
   cat: (el) => {
@@ -2066,6 +2199,10 @@ renderTop();
 renderAll();
 for (const s of scene.sources) ensureMedia(s, true);
 if (scene.sinkId) void setOutputDevice(scene.sinkId);
+if (scene.sources.some((s) => s.kind === 'remote')) ensureStudio();
+window.addEventListener('beforeunload', (e) => {
+  if (livePanel.live || ui.recorder) e.preventDefault();
+});
 void refreshDevices();
 navigator.mediaDevices?.addEventListener?.('devicechange', () => void refreshDevices());
 requestAnimationFrame(frame);

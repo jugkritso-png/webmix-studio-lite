@@ -1,7 +1,7 @@
 // The serialisable show: sources, bus assignment and output settings.
 // Live media (streams, elements, audio nodes) live in engine.ts, keyed by source id.
 
-export type Kind = 'camera' | 'screen' | 'video' | 'playlist' | 'image' | 'color' | 'bars' | 'clock' | 'text' | 'timer' | 'score' | 'mic' | 'audio';
+export type Kind = 'camera' | 'remote' | 'screen' | 'video' | 'playlist' | 'image' | 'color' | 'bars' | 'clock' | 'text' | 'timer' | 'score' | 'mic' | 'audio';
 export type TextStyle = 'lower' | 'title' | 'corner' | 'comment' | 'slate' | 'ticker';
 export type Tone = 'accent' | 'panel' | 'amber';
 export type Transition = 'mix' | 'dip' | 'wipe';

@@ -13,7 +13,14 @@
   },
   "devDependencies": {
     "@playwright/test": "1.63.0",
+    "@types/ws": "8.18.2",
+    "peer": "1.0.2",
     "typescript": "5.9.3",
-    "vite": "7.1.12"
+    "vite": "7.1.12",
+    "ws": "8.18.3"
+  },
+  "dependencies": {
+    "peerjs": "1.5.5",
+    "qrcode-generator": "2.0.4"
   }
 }

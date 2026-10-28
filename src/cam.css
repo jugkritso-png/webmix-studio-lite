@@ -1,0 +1,31 @@
+/* Phone camera / remote guest page. Tokens only, like the studio. */
+*, *::before, *::after { box-sizing: border-box; }
+html, body { height: 100%; }
+body.cam { overflow: hidden; }
+.cam__app { display: flex; flex-direction: column; height: 100dvh; }
+.cam__top { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-2) var(--space-3); background: var(--panel); border-bottom: 1px solid var(--line); }
+.cam__top b { font: 700 16px/24px var(--font-sans); }
+.cam__top .grow { flex: 1; }
+.logo__red { fill: var(--pgm); }
+.logo__ink { fill: var(--bg); }
+.cam__stage { position: relative; flex: 1; min-height: 0; background: var(--card-ground); border: 4px solid var(--line); }
+.cam__stage.is-pgm { border-color: var(--pgm); box-shadow: var(--glow-pgm); }
+.cam__stage.is-pvw { border-color: var(--pvw); box-shadow: var(--glow-pvw); }
+.cam__stage video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.cam__self.is-mirror { transform: scaleX(-1); }
+.cam__pip { position: absolute !important; inset: auto var(--space-3) var(--space-3) auto !important; width: 32% !important; height: auto !important; aspect-ratio: 16 / 9; border-radius: var(--radius-md); border: 2px solid var(--line-2); background: var(--card-ground); object-fit: cover !important; }
+.cam__tally { position: absolute; left: var(--space-3); top: var(--space-3); font: 700 13px/18px var(--font-mono); letter-spacing: .06em; padding: 4px var(--space-2); border-radius: var(--radius-xs); color: var(--on-accent); }
+.cam__tally:empty { display: none; }
+.is-pgm .cam__tally { background: var(--pgm-fill); }
+.is-pvw .cam__tally { background: var(--pvw-fill); }
+.cam__empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-3); padding: var(--space-8); text-align: center; color: var(--muted); }
+.cam__empty .display { color: var(--text); margin: 0; }
+.cam__bar { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-3); padding-bottom: calc(var(--space-3) + env(safe-area-inset-bottom)); background: var(--panel); border-top: 1px solid var(--line); }
+.cam__row { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.cam__row .wm-input { flex: 1; min-width: 140px; height: var(--control-lg); }
+.cam__row .wm-btn { height: var(--control-lg); }
+.cam__row .wm-btn--primary { flex: 1; }
+.cam__status { font: 500 12px/16px var(--font-sans); color: var(--muted); min-height: 16px; }
+.cam__status.is-err { color: var(--pgm); }
+.wm-seg button { height: var(--control-lg); }
+.wm-btn[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent-line); }

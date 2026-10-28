@@ -19,6 +19,8 @@ export interface Strip {
   fader: GainNode;
   analyser: AnalyserNode;
   mon: GainNode;
+  /** source this strip belongs to, for mix-minus feeds */
+  owner: string;
   /** last values sent to each AudioParam, so unchanged ones are not re-scheduled */
   last: Record<string, number>;
 }
@@ -127,7 +129,33 @@ function insertGate(ctx: AudioContext, s: Strip): void {
   s.pre.connect(s.gate).connect(s.hpf);
 }
 
-function makeStrip(m: Media, input: AudioNode): void {
+const strips = new Set<Strip>();
+/** mix-minus feeds for remote guests: everything except the guest's own voice */
+const minus = new Map<string, MediaStreamAudioDestinationNode>();
+
+export function mixMinus(owner: string): MediaStream {
+  const ctx = ensureAudio();
+  let dest = minus.get(owner);
+  if (!dest) {
+    dest = ctx.createMediaStreamDestination();
+    minus.set(owner, dest);
+    for (const s of strips) if (s.owner !== owner) s.fader.connect(dest);
+  }
+  return dest.stream;
+}
+
+export function dropMixMinus(owner: string): void {
+  const dest = minus.get(owner);
+  if (!dest) return;
+  for (const s of strips) {
+    try {
+      s.fader.disconnect(dest);
+    } catch { /* was never connected */ }
+  }
+  minus.delete(owner);
+}
+
+function makeStrip(m: Media, input: AudioNode, owner = ''): void {
   const ctx = ensureAudio();
   const pre = ctx.createGain();
   const hpf = Object.assign(ctx.createBiquadFilter(), { type: 'highpass' as BiquadFilterType });
@@ -155,14 +183,16 @@ function makeStrip(m: Media, input: AudioNode): void {
   fader.connect(analyser);
   fader.connect(master);
   fader.connect(mon).connect(monBus);
-  const strip: Strip = { input, pre, gate: null, hpf, low, mid, high, comp, delay, pan, fader, analyser, mon, last: {} };
+  const strip: Strip = { input, pre, gate: null, hpf, low, mid, high, comp, delay, pan, fader, analyser, mon, owner, last: {} };
   insertGate(ctx, strip);
   m.strip = strip;
+  strips.add(strip);
+  for (const [who, dest] of minus) if (who !== owner) fader.connect(dest);
 }
 
-export function attachStreamAudio(m: Media, stream: MediaStream): void {
+export function attachStreamAudio(m: Media, stream: MediaStream, owner = ''): void {
   if (!stream.getAudioTracks().length) return;
-  makeStrip(m, ensureAudio().createMediaStreamSource(stream));
+  makeStrip(m, ensureAudio().createMediaStreamSource(stream), owner);
 }
 
 export function attachElementAudio(m: Media, el: HTMLMediaElement): void {
@@ -174,6 +204,7 @@ export function releaseStrip(m: Media): void {
     m.strip?.input.disconnect();
     m.strip?.fader.disconnect();
   } catch { /* already gone */ }
+  if (m.strip) strips.delete(m.strip);
   m.strip = undefined;
 }
 

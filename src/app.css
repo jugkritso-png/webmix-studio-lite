@@ -185,6 +185,24 @@ select.wm-input { padding-right: var(--space-2); cursor: pointer; }
 .dlg__head { display: flex; align-items: center; justify-content: space-between; padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--line); }
 .dlg__body { padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-4); overflow-y: auto; }
 .dlg__foot { display: flex; justify-content: flex-end; gap: var(--space-2); padding: var(--space-3) var(--space-4); border-top: 1px solid var(--line); }
+.dlg__box--wide { width: min(640px, calc(100vw - 2 * var(--space-4))); }
+.dlg:has(.dlg__box--wide) { width: min(640px, calc(100vw - 2 * var(--space-4))); }
+.live-panel { display: flex; flex-direction: column; gap: var(--space-4); }
+.live-panel > .wm-btn { align-self: flex-start; }
+.live-panel__link { color: var(--accent-text); }
+.live-panel__list { display: flex; flex-direction: column; gap: var(--space-3); }
+.dest { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-3); border-radius: var(--radius-md); background: var(--panel-2); border: 1px solid var(--line); }
+.dest__head { display: flex; align-items: center; gap: var(--space-2); }
+.dest__platform { flex: 1; min-width: 0; }
+.dest__kbps { min-width: 0; }
+.dest__on { display: inline-flex; align-items: center; gap: var(--space-2); margin-left: auto; font: 500 12px/16px var(--font-sans); color: var(--muted); cursor: pointer; }
+.dest__on input { width: 18px; height: 18px; accent-color: var(--accent); }
+.remote { display: flex; flex-direction: column; gap: var(--space-3); }
+.remote__qr { align-self: center; width: min(240px, 70vw); aspect-ratio: 1; padding: var(--space-2); border-radius: var(--radius-md); background: var(--text); display: flex; align-items: center; justify-content: center; }
+.remote__qr svg { width: 100%; height: 100%; }
+.remote__qr svg rect { fill: var(--text); }
+.remote__qr svg path { fill: var(--bg); }
+.remote__qr .wm-note { color: var(--bg); }
 .chooser { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2); }
 .chooser .wm-btn { justify-content: flex-start; }
 .chooser .tag { margin-left: auto; color: var(--muted); }
@@ -255,4 +273,5 @@ select.wm-input { padding-right: var(--space-2); cursor: pointer; }
   .toast-host { bottom: calc(64px + 60px + var(--space-3)); }
   .toast-host .wm-toast { width: calc(100vw - 2 * var(--space-4)); }
   .chooser { grid-template-columns: 1fr; }
+  .dest__on { margin-left: 0; min-height: var(--control-lg); }
 }

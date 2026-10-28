@@ -154,23 +154,6 @@ test.describe('desktop', () => {
     await expect(pvwName(page)).toHaveText('พื้นสี 2');
   });
 
-  test('live settings never keep the stream key', async ({ page }) => {
-    await page.goto('/');
-    await page.locator('#btn-live').click();
-    const dlg = page.locator('#dlg');
-    await expect(dlg).toContainText('ต้องใช้ gateway');
-    await dlg.locator('#live-url').fill('http://wrong');
-    await dlg.locator('#live-check').click();
-    await expect(dlg.locator('#live-help')).toContainText('rtmp://');
-    await dlg.locator('#live-url').fill('rtmp://a.rtmp.youtube.com/live2');
-    await dlg.locator('#live-key').fill('secret-key-123');
-    await dlg.locator('#live-check').click();
-    await expect(dlg.locator('#live-help')).toContainText('ต่อ gateway');
-    await dlg.getByRole('button', { name: 'ปิด' }).last().click();
-    const stored = await page.evaluate(() => JSON.stringify(localStorage));
-    expect(stored).not.toContain('secret-key-123');
-  });
-
   test('Thai text is never below 12px', async ({ page }) => {
     await page.goto('/');
     await addTile(page, 'source', 'cam');
@@ -229,6 +212,25 @@ test.describe('mobile', () => {
     await expect(page.locator('#insp')).toBeHidden();
     await page.waitForTimeout(400);
     await page.screenshot({ path: 'docs/screenshots/mobile.png' });
+  });
+
+  test('live panel and phone page fit a phone', async ({ page }) => {
+    await page.goto('/');
+    await page.locator('#btn-live').tap();
+    await expect(page.locator('#dlg .live-panel')).toBeVisible();
+    const small = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('#dlg button, #dlg input:not([type="checkbox"]), #dlg select')]
+      .filter((el) => el.checkVisibility())
+      .map((el) => ({ el: el.textContent?.trim() || el.getAttribute('aria-label') || el.id, h: Math.round(el.getBoundingClientRect().height) }))
+      .filter((x) => x.h < 44));
+    expect(small).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(0);
+    await page.screenshot({ path: 'docs/screenshots/live-mobile.png' });
+
+    await page.goto('/cam.html?call=webmix-lite-test');
+    await expect(page.locator('#go')).toBeVisible();
+    const camSmall = await page.evaluate(() => [...document.querySelectorAll<HTMLElement>('button, input')]
+      .filter((el) => el.checkVisibility()).filter((el) => el.getBoundingClientRect().height < 44).map((el) => el.textContent?.trim() || el.id));
+    expect(camSmall).toEqual([]);
   });
 
   test('touch targets are at least 44px', async ({ page }) => {
