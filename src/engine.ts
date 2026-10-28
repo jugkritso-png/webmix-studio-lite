@@ -1,6 +1,7 @@
 // Media, canvas compositing, audio mixing and recording.
 // Every colour drawn on a canvas is read from the design tokens (tokens.css).
-import type { Scene, Source, Tone } from './scene';
+import type { OverlayFx, Scene, Source, Tone } from './scene';
+import { createKeyer, type Keyer } from './keyer';
 
 export interface Media {
   el?: HTMLVideoElement | HTMLAudioElement | HTMLImageElement;
@@ -13,6 +14,7 @@ export interface Media {
   /** playlist files and the one now loaded */
   list?: { url: string; name: string }[];
   index?: number;
+  keyer?: Keyer | null;
 }
 
 export const media = new Map<string, Media>();
@@ -268,6 +270,33 @@ function drawText(ctx: CanvasRenderingContext2D, s: Source, W: number, H: number
       ctx.font = font(500, ss);
       ctx.fillText(p.sub, W / 2, y + pad + ts * 1.3, bw - pad * 2);
     }
+  } else if (p.style === 'ticker') {
+    const bh = 60 * u, y = H - 40 * u - bh, ts = 28 * u;
+    const items = (p.items || title).split('\n').map((x) => x.trim()).filter(Boolean);
+    const line = items.join('     •     ');
+    ctx.textBaseline = 'middle';
+    ctx.font = font(700, ts);
+    const label = p.sub;
+    const lw = label ? ctx.measureText(label).width + 40 * u : 0;
+    ctx.fillStyle = tk('panel');
+    ctx.fillRect(0, y, W, bh);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(lw, y, W - lw, bh);
+    ctx.clip();
+    ctx.font = font(500, ts);
+    const tw = ctx.measureText(line).width + 120 * u;
+    const off = ((performance.now() / 1000) * p.speed * u) % tw;
+    ctx.fillStyle = tk('text');
+    for (let x = W - off; x > lw - tw; x -= tw) ctx.fillText(line, x, y + bh / 2);
+    ctx.restore();
+    if (label) {
+      ctx.fillStyle = tk(bgTok);
+      ctx.fillRect(0, y, lw, bh);
+      ctx.fillStyle = tk(fgTok);
+      ctx.font = font(700, ts);
+      ctx.fillText(label, 20 * u, y + bh / 2);
+    }
   } else if (p.style === 'slate') {
     ctx.fillStyle = tk(p.tone === 'panel' ? 'card-ground' : bgTok);
     ctx.fillRect(0, 0, W, H);
@@ -356,6 +385,102 @@ function drawClock(ctx: CanvasRenderingContext2D, s: Source, W: number, H: numbe
   ctx.fillText(s.props.sub || d.toLocaleDateString('th-TH', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }), W / 2, H / 2 + 110 * u);
 }
 
+export function timerValue(s: Source, now = Date.now()): number {
+  const p = s.props;
+  const elapsed = p.timerAcc + (p.timerStart ? now - p.timerStart : 0);
+  return p.timerMode === 'down' ? Math.max(0, p.timerDur - elapsed) : elapsed;
+}
+
+export function fmtClock(ms: number): string {
+  const t = Math.ceil(ms / 1000);
+  const h = Math.floor(t / 3600), m = Math.floor(t / 60) % 60, sec = t % 60;
+  return h ? `${h}:${pad2(m)}:${pad2(sec)}` : `${pad2(m)}:${pad2(sec)}`;
+}
+
+function drawTimer(ctx: CanvasRenderingContext2D, s: Source, W: number, H: number): void {
+  const p = s.props;
+  const u = H / 720;
+  const v = timerValue(s);
+  const done = p.timerMode === 'down' && v <= 0;
+  const [bgTok, fgTok] = done ? (['amber', 'on-amber'] as const) : TONES[p.tone] ?? TONES.panel;
+  const text = fmtClock(v);
+  ctx.textBaseline = 'middle';
+  if (p.style === 'corner') {
+    const ts = 40 * u, padX = 24 * u, bh = 72 * u;
+    ctx.font = font(700, ts, 'font-mono');
+    const lw = p.title ? (ctx.font = font(600, 24 * u), ctx.measureText(p.title).width + 16 * u) : 0;
+    ctx.font = font(700, ts, 'font-mono');
+    const bw = ctx.measureText(text).width + padX * 2 + lw;
+    const x = W - 40 * u - bw, y = 40 * u;
+    ctx.fillStyle = tk(bgTok);
+    ctx.beginPath();
+    ctx.roundRect(x, y, bw, bh, 12 * u);
+    ctx.fill();
+    ctx.fillStyle = tk(fgTok);
+    ctx.textAlign = 'left';
+    if (p.title) {
+      ctx.font = font(600, 24 * u);
+      ctx.fillText(p.title, x + padX, y + bh / 2);
+    }
+    ctx.font = font(700, ts, 'font-mono');
+    ctx.fillText(text, x + padX + lw, y + bh / 2);
+  } else {
+    const ts = 180 * u;
+    ctx.font = font(700, ts, 'font-mono');
+    const bw = ctx.measureText(text).width + 96 * u, bh = ts * 1.1 + (p.title ? 64 * u : 0) + 48 * u;
+    const x = (W - bw) / 2, y = (H - bh) / 2;
+    ctx.fillStyle = tk(bgTok);
+    ctx.beginPath();
+    ctx.roundRect(x, y, bw, bh, 16 * u);
+    ctx.fill();
+    ctx.fillStyle = tk(fgTok);
+    ctx.textAlign = 'center';
+    if (p.title) {
+      ctx.font = font(600, 40 * u);
+      ctx.fillText(p.title, W / 2, y + 24 * u + 24 * u);
+    }
+    ctx.font = font(700, ts, 'font-mono');
+    ctx.fillText(text, W / 2, y + bh - 24 * u - ts * 0.55);
+  }
+}
+
+function drawScore(ctx: CanvasRenderingContext2D, s: Source, W: number, H: number): void {
+  const p = s.props;
+  const u = H / 720;
+  const x = 40 * u, rowH = 52 * u, nameW = 240 * u, scoreW = 72 * u, bar = 10 * u;
+  const rows: [string, number, string][] = [
+    [p.teamA, p.scoreA, p.colorA || tk('accent')],
+    [p.teamB, p.scoreB, p.colorB || tk('pgm-fill')],
+  ];
+  ctx.textBaseline = 'middle';
+  rows.forEach(([team, score, color], i) => {
+    const y = 40 * u + i * rowH;
+    ctx.fillStyle = color;
+    ctx.fillRect(x, y, bar, rowH);
+    ctx.fillStyle = tk('panel');
+    ctx.fillRect(x + bar, y, nameW, rowH);
+    ctx.fillStyle = tk('panel-3');
+    ctx.fillRect(x + bar + nameW, y, scoreW, rowH);
+    ctx.fillStyle = tk('text');
+    ctx.textAlign = 'left';
+    ctx.font = font(700, 26 * u);
+    ctx.fillText(team, x + bar + 16 * u, y + rowH / 2, nameW - 24 * u);
+    ctx.textAlign = 'center';
+    ctx.font = font(700, 30 * u, 'font-mono');
+    ctx.fillText(String(score), x + bar + nameW + scoreW / 2, y + rowH / 2);
+  });
+  if (p.period) {
+    const y = 40 * u + rowH * 2;
+    ctx.font = font(600, 22 * u);
+    const pw = ctx.measureText(p.period).width + 24 * u;
+    ctx.fillStyle = tk('amber');
+    ctx.fillRect(x, y, pw, 36 * u);
+    ctx.fillStyle = tk('on-amber');
+    ctx.textAlign = 'left';
+    ctx.fillText(p.period, x + 12 * u, y + 18 * u);
+  }
+}
+
 export function drawSource(ctx: CanvasRenderingContext2D, s: Source, W: number, H: number): void {
   const p = s.props;
   ctx.save();
@@ -371,6 +496,16 @@ export function drawSource(ctx: CanvasRenderingContext2D, s: Source, W: number, 
     drawBars(ctx, W, H);
   } else if (s.kind === 'clock') {
     drawClock(ctx, s, W, H);
+  } else if (s.kind === 'timer') {
+    ctx.translate(cx, cy);
+    ctx.scale(p.scale, p.scale);
+    ctx.translate(-W / 2, -H / 2);
+    drawTimer(ctx, s, W, H);
+  } else if (s.kind === 'score') {
+    ctx.translate(cx, cy);
+    ctx.scale(p.scale, p.scale);
+    ctx.translate(-W / 2, -H / 2);
+    drawScore(ctx, s, W, H);
   } else if (s.kind === 'text') {
     ctx.translate(cx, cy);
     ctx.scale(p.scale * (p.flip ? -1 : 1), p.scale);
@@ -383,12 +518,30 @@ export function drawSource(ctx: CanvasRenderingContext2D, s: Source, W: number, 
     } else {
       const w = el instanceof HTMLVideoElement ? el.videoWidth : el.naturalWidth;
       const h = el instanceof HTMLVideoElement ? el.videoHeight : el.naturalHeight;
-      const fit = p.fit === 'cover' ? Math.max(W / w, H / h) : Math.min(W / w, H / h);
-      const dw = w * fit * p.scale;
-      const dh = h * fit * p.scale;
-      ctx.translate(cx, cy);
-      if (p.flip) ctx.scale(-1, 1);
-      ctx.drawImage(el, -dw / 2, -dh / 2, dw, dh);
+      const sx = w * p.cropL, sy = h * p.cropT;
+      const sw = w * (1 - p.cropL - p.cropR), sh = h * (1 - p.cropT - p.cropB);
+      if (sw > 1 && sh > 1) {
+        // the fit is taken from the full frame, so cropping trims edges without rescaling
+        const k = (p.fit === 'cover' ? Math.max(W / w, H / h) : Math.min(W / w, H / h)) * p.scale;
+        const dw = sw * k, dh = sh * k;
+        const ox = ((p.cropL - p.cropR) / 2) * w * k, oy = ((p.cropT - p.cropB) / 2) * h * k;
+        let img: CanvasImageSource = el;
+        if (p.key !== 'off') {
+          const m = media.get(s.id)!;
+          if (m.keyer === undefined) m.keyer = createKeyer();
+          if (m.keyer?.run(el, w, h, p.key, p.keyTol)) img = m.keyer.canvas;
+        }
+        ctx.translate(cx, cy);
+        if (p.flip) ctx.scale(-1, 1);
+        ctx.drawImage(img, sx, sy, sw, sh, ox - dw / 2, oy - dh / 2, dw, dh);
+        if (p.border > 0) {
+          const lw = p.border * (H / 720);
+          ctx.filter = 'none';
+          ctx.lineWidth = lw;
+          ctx.strokeStyle = tk(p.borderTone === 'accent' ? 'accent-line' : p.borderTone);
+          ctx.strokeRect(ox - dw / 2 - lw / 2, oy - dh / 2 - lw / 2, dw + lw, dh + lw);
+        }
+      }
     }
   }
   ctx.restore();
@@ -408,6 +561,39 @@ export function transitionProgress(trans: TransitionState, now: number): number 
   return trans.manual ?? Math.min(1, Math.max(0, (now - trans.start) / trans.dur));
 }
 
+export interface Layer {
+  source: Source;
+  fx: OverlayFx;
+  /** 0 = gone, 1 = fully in */
+  e: number;
+}
+
+function drawLayer(ctx: CanvasRenderingContext2D, l: Layer, W: number, H: number): void {
+  const e = l.e < 1 ? 1 - (1 - l.e) ** 3 : 1;
+  ctx.save();
+  switch (l.fx) {
+    case 'fade': ctx.globalAlpha = e; break;
+    case 'zoom':
+      ctx.globalAlpha = e;
+      ctx.translate(W / 2, H / 2);
+      ctx.scale(0.6 + 0.4 * e, 0.6 + 0.4 * e);
+      ctx.translate(-W / 2, -H / 2);
+      break;
+    case 'slide-left': ctx.translate((1 - e) * W, 0); break;
+    case 'slide-right': ctx.translate(-(1 - e) * W, 0); break;
+    case 'slide-up': ctx.translate(0, (1 - e) * H); break;
+    case 'slide-down': ctx.translate(0, -(1 - e) * H); break;
+    case 'wipe':
+      ctx.beginPath();
+      ctx.rect(0, 0, W * e, H);
+      ctx.clip();
+      break;
+    default: break;
+  }
+  drawSource(ctx, l.source, W, H);
+  ctx.restore();
+}
+
 function bus(ctx: CanvasRenderingContext2D, scene: Scene, id: string | null, W: number, H: number): void {
   const s = id ? scene.sources.find((x) => x.id === id) : undefined;
   if (s) drawSource(ctx, s, W, H);
@@ -416,7 +602,7 @@ function bus(ctx: CanvasRenderingContext2D, scene: Scene, id: string | null, W: 
 /** Draws one output bus; `trans` blends PGM towards the incoming source. */
 export function drawBus(
   ctx: CanvasRenderingContext2D, scene: Scene, id: string | null,
-  trans: TransitionState | null, now: number, fade = 0,
+  trans: TransitionState | null, now: number, fade = 0, layers: Layer[] = [],
 ): void {
   const { width: W, height: H } = ctx.canvas;
   ctx.globalAlpha = 1;
@@ -456,8 +642,8 @@ export function drawBus(
   }
 
   const shown = new Set([id, trans?.from, trans?.to]);
-  for (const s of scene.sources) {
-    if (s.props.overlay && !shown.has(s.id)) drawSource(ctx, s, W, H);
+  for (const l of layers) {
+    if (!shown.has(l.source.id)) drawLayer(ctx, l, W, H);
   }
 
   if (fade > 0) {

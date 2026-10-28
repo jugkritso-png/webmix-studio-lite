@@ -3,13 +3,14 @@ import '../design/tokens.css';
 import './app.css';
 import { icon, logo, type IconName } from './icons';
 import {
-  clone, defaultProps, isVisual, loadScene, needsMedia, OUTPUT_SIZE, saveScene, uid,
-  type Kind, type Props, type Resolution, type Scene, type Source, type TextStyle,
+  clone, defaultProps, isVisual, loadPresets, loadScene, needsMedia, OUTPUT_SIZE, OVERLAY_FX, saveScene, savePresets, uid,
+  type Kind, type OverlayFx, type Props, type Resolution, type Scene, type Source, type TextStyle,
 } from './scene';
+import { fetchRows, REFRESH_MS } from './data';
 import {
   attachElementAudio, attachStreamAudio, audioForUrl, drawBus, drawSource, ensureAudio, imageFor,
   level, masterLevel, media, Recorder, release, tk, updateGains, videoForStream, videoForUrl,
-  transitionProgress, type Media, type TransitionState,
+  fmtClock, timerValue, transitionProgress, type Layer, type Media, type TransitionState,
 } from './engine';
 import { multiviewOpen, openMultiview, openOutput, outputOpen, paintWindows } from './windows';
 
@@ -21,7 +22,7 @@ type Target = 'pvw' | 'pgm' | 'strip';
 const CATS: { id: Cat; label: string; icon: IconName; search: string; filters: string[]; add: string }[] = [
   { id: 'source', label: 'แหล่งภาพ', icon: 'source', search: 'ค้นหากล้อง, หน้าจอ, ไฟล์', filters: ['ทั้งหมด', 'กล้อง', 'หน้าจอ', 'ไฟล์', 'สัญญาณ'], add: 'เพิ่มแหล่งภาพ' },
   { id: 'audio', label: 'เสียง', icon: 'audio', search: 'ค้นหาไมค์, ไฟล์เสียง', filters: ['ทั้งหมด', 'ไมค์', 'ไฟล์'], add: 'เพิ่มเสียง' },
-  { id: 'graphic', label: 'กราฟิก', icon: 'graphic', search: 'ค้นหากราฟิก', filters: ['ทั้งหมด', 'ข้อความ', 'รูป'], add: 'เพิ่มรูปซ้อน' },
+  { id: 'graphic', label: 'กราฟิก', icon: 'graphic', search: 'ค้นหากราฟิก', filters: ['ทั้งหมด', 'ข้อความ', 'รูป', 'ข้อมูล'], add: 'เพิ่มรูปซ้อน' },
   { id: 'text', label: 'ข้อความ', icon: 'text', search: 'ค้นหาแบบข้อความ', filters: ['ทั้งหมด'], add: 'เพิ่มข้อความ' },
   { id: 'comment', label: 'คอมเมนต์', icon: 'comment', search: 'ค้นหาแบบคอมเมนต์', filters: ['ทั้งหมด'], add: 'เพิ่มคอมเมนต์' },
   { id: 'effect', label: 'เอฟเฟกต์', icon: 'effect', search: 'ค้นหาเอฟเฟกต์', filters: ['ทั้งหมด', 'สี', 'ภาพ'], add: 'ล้างเอฟเฟกต์' },
@@ -47,12 +48,58 @@ let trans: TransitionState | null = null;
 const ftb = { target: 0, level: 0 };
 /** T-Bar rests at 0 or 100; the next pull travels to the other end */
 let tbarBase = 0;
+/** overlay channel animations in flight */
+const ovlAnim: ({ start: number; dir: 'in' | 'out' } | null)[] = Array(8).fill(null);
+/** rows fetched for sources with a data link */
+const dataState = new Map<string, { rows: string[][]; error: string; at: number; loading: boolean; url: string }>();
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string, root: ParentNode = document) => root.querySelector<T>(sel)!;
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const byId = (id: string | null) => (id ? scene.sources.find((s) => s.id === id) : undefined);
 const visuals = () => scene.sources.filter((s) => isVisual(s.kind));
 const cutSources = () => visuals();
+/** overlay channel a source sits on, or -1 */
+const chOf = (id: string | null) => (id ? scene.overlays.findIndex((o) => o.src === id) : -1);
+const isGraphic = (id: string | null) => chOf(id) >= 0;
+const ovlOn = (id: string | null) => {
+  const i = chOf(id);
+  return i >= 0 && scene.overlays[i].on;
+};
+
+/** channel for a new graphic: its own, else the first free, else the last */
+function freeChannel(sc: Scene, id?: string): number {
+  const own = id ? sc.overlays.findIndex((o) => o.src === id) : -1;
+  if (own >= 0) return own;
+  const free = sc.overlays.findIndex((o) => !o.src);
+  return free >= 0 ? free : sc.overlays.length - 1;
+}
+
+function setOverlay(i: number, on: boolean): void {
+  const o = scene.overlays[i];
+  if (!o?.src || o.on === on) return;
+  o.on = on;
+  ovlAnim[i] = o.fx === 'cut' || o.dur <= 0 ? null : { start: performance.now(), dir: on ? 'in' : 'out' };
+  changed(false);
+  renderOverlayRow();
+  if (ui.selected === o.src) renderInspector();
+}
+
+function layers(now: number): Layer[] {
+  const out: Layer[] = [];
+  scene.overlays.forEach((o, i) => {
+    const source = byId(o.src);
+    if (!source) return;
+    let e = o.on ? 1 : 0;
+    const a = ovlAnim[i];
+    if (a) {
+      const t = Math.min(1, (now - a.start) / Math.max(1, o.dur));
+      e = a.dir === 'in' ? t : 1 - t;
+      if (t >= 1) ovlAnim[i] = null;
+    }
+    if (e > 0) out.push({ source, fx: o.fx, e });
+  });
+  return out;
+}
 
 /* ================= undo / persistence ================= */
 
@@ -84,6 +131,11 @@ function restore(raw: string): void {
   if (scene.pvw && ids.has(scene.pvw)) next.pvw = scene.pvw;
   if (next.pgm && !ids.has(next.pgm)) next.pgm = null;
   if (next.pvw && !ids.has(next.pvw)) next.pvw = null;
+  // overlays that are on air stay on air across undo
+  next.overlays.forEach((o, i) => {
+    const cur = scene.overlays[i];
+    o.on = !!(o.src && cur?.src === o.src && cur.on);
+  });
   scene = next;
   if (ui.selected && !ids.has(ui.selected)) ui.selected = null;
   trans = null;
@@ -329,7 +381,7 @@ function newSource(kind: Kind, name: string, meta: string, props: Partial<Props>
   return { id: uid(), kind, name, meta, props: { ...defaultProps(), ...props } };
 }
 
-async function addMedia(kind: Kind, label: string, target?: Target, deviceId?: string, extra: Partial<Props> = {}): Promise<void> {
+async function addMedia(kind: Kind, label: string, target?: Target, deviceId?: string, extra: Partial<Props> = {}, overlay = false): Promise<void> {
   try {
     if (kind === 'video' || kind === 'audio' || kind === 'screen' || kind === 'mic') ensureAudio();
     const got = await acquire(kind, deviceId);
@@ -343,24 +395,32 @@ async function addMedia(kind: Kind, label: string, target?: Target, deviceId?: s
         if (byId(s.id)) toast(`หยุดแชร์หน้าจอ ${s.name} แล้ว กดเชื่อมต่อใหม่เพื่อแชร์อีกครั้ง`);
       });
     }
-    addSource(s, got.m, target);
+    addSource(s, got.m, target, overlay);
   } catch (e) {
     mediaError(e, WHAT[kind] ?? 'อุปกรณ์');
   }
 }
 
-function addSource(s: Source, m: Media | null, target?: Target): void {
+function addSource(s: Source, m: Media | null, target?: Target, overlay = false): void {
   if (m) media.set(s.id, m);
+  const ch = overlay ? freeChannel(scene) : -1;
   mutate((sc) => {
     sc.sources.push(s);
-    if (!isVisual(s.kind) || s.props.overlay) return;
+    if (overlay) {
+      sc.overlays[ch] = { ...sc.overlays[ch], src: s.id, on: false, fx: s.props.style === 'lower' ? 'slide-left' : 'fade' };
+      return;
+    }
+    if (!isVisual(s.kind)) return;
     if (target === 'pgm') sc.pgm = s.id;
     else if (target === 'pvw') sc.pvw = s.id;
     else if (!sc.pgm) sc.pgm = s.id;
     else sc.pvw = s.id;
-  }, { toast: `เพิ่ม ${s.name} แล้ว` });
+  }, { toast: overlay ? `เพิ่ม ${s.name} ที่ Overlay ${ch + 1} แล้ว` : `เพิ่ม ${s.name} แล้ว` });
+  // a new graphic goes on air straight away, unless it was dropped on Preview
+  if (overlay && target !== 'pvw') setOverlay(ch, true);
   select(s.id);
   renderInspector();
+  if (dataState.size || s.props.dataUrl) pollData(true);
 }
 
 function removeSource(id: string): void {
@@ -368,7 +428,10 @@ function removeSource(id: string): void {
   if (!s) return;
   mutate((sc) => {
     sc.sources = sc.sources.filter((x) => x.id !== id);
-    const rest = sc.sources.filter((x) => isVisual(x.kind) && !x.props.overlay);
+    sc.overlays.forEach((o) => {
+      if (o.src === id) Object.assign(o, { src: null, on: false });
+    });
+    const rest = sc.sources.filter((x) => isVisual(x.kind) && !sc.overlays.some((o) => o.src === x.id));
     if (sc.pgm === id) sc.pgm = sc.pvw && sc.pvw !== id ? sc.pvw : rest[0]?.id ?? null;
     if (sc.pvw === id || sc.pvw === sc.pgm) sc.pvw = rest.find((x) => x.id !== sc.pgm)?.id ?? null;
   }, { toast: `ลบ ${s.name} แล้ว` });
@@ -437,6 +500,16 @@ function onTbar(value: number): void {
   }
 }
 
+function renderOverlayRow(): void {
+  const row = document.getElementById('ovl-row');
+  if (!row) return;
+  row.innerHTML = `<span class="tag">OVL</span>${scene.overlays.map((o, i) => {
+    const src = byId(o.src);
+    return `<button type="button" class="ovl-btn" data-act="ovl" data-i="${i}" aria-pressed="${o.on}" ${src ? '' : 'disabled'}
+      title="${src ? `${esc(src.name)} · Shift+${i + 1}` : `Overlay ${i + 1} ว่าง`}" aria-label="Overlay ${i + 1}${src ? ` ${esc(src.name)}` : ' ว่าง'}">${i + 1}</button>`;
+  }).join('')}`;
+}
+
 function renderTbar(): void {
   const t = document.querySelector<HTMLInputElement>('#tbar');
   if (t && trans?.manual === undefined) t.value = String(tbarBase);
@@ -452,7 +525,7 @@ function toggleFtb(): void {
 function toPreview(id: string): void {
   const s = byId(id);
   if (!s) return;
-  if (s.props.overlay) {
+  if (isGraphic(id)) {
     select(id);
     renderInspector();
     renderStrip();
@@ -472,25 +545,48 @@ function select(id: string | null): void {
 }
 
 function toggleOverlay(id: string): void {
+  const i = chOf(id);
+  if (i >= 0) setOverlay(i, !scene.overlays[i].on);
+}
+
+/** put a source on an overlay channel (and off the PVW / PGM buses) */
+function assignOverlay(id: string, ch?: number): void {
+  const s = byId(id);
+  if (!s) return;
+  const target = ch ?? freeChannel(scene, id);
+  mutate((sc) => {
+    // the effect settings travel with the graphic
+    const old = sc.overlays.find((o) => o.src === id);
+    const look = old ? { fx: old.fx, dur: old.dur } : {};
+    sc.overlays.forEach((o) => {
+      if (o.src === id) Object.assign(o, { src: null, on: false });
+    });
+    sc.overlays[target] = { ...sc.overlays[target], ...look, src: id, on: false };
+  }, { toast: `ย้าย ${s.name} ไป Overlay ${target + 1} แล้ว` });
+  mutateBusAfterOverlay(id);
+}
+
+function unassignOverlay(id: string): void {
   const s = byId(id);
   if (!s) return;
   mutate((sc) => {
-    const t = sc.sources.find((x) => x.id === id);
-    if (t) t.props.overlay = !t.props.overlay;
-  }, { toast: s.props.overlay ? `ซ่อน ${s.name} แล้ว` : `แสดง ${s.name} บนจอแล้ว` });
+    sc.overlays.forEach((o) => {
+      if (o.src === id) Object.assign(o, { src: null, on: false });
+    });
+  }, { toast: `เอา ${s.name} ออกจาก Overlay แล้ว` });
 }
 
 function cutTo(id: string): void {
   const s = byId(id);
   if (!s) return;
-  if (s.props.overlay) return toggleOverlay(id);
+  if (isGraphic(id)) return toggleOverlay(id);
   if (scene.pgm === id) return;
   trans = null;
   scene.pvw = id;
   cut();
 }
 
-const onAir = (id: string) => scene.pgm === id || trans?.to === id || trans?.from === id || !!byId(id)?.props.overlay;
+const onAir = (id: string) => scene.pgm === id || trans?.to === id || trans?.from === id || ovlOn(id);
 
 /* ================= gallery catalog ================= */
 
@@ -504,10 +600,14 @@ interface Tile {
   fx?: string;
 }
 
-const textSource = (style: TextStyle, title: string, sub: string, extra: Partial<Props> = {}) =>
-  newSource('text', title, { lower: 'Lower third', title: 'หัวเรื่อง', corner: 'ป้ายมุมจอ', comment: 'คอมเมนต์', slate: 'Slate' }[style], { style, title, sub, overlay: true, ...extra });
+const STYLE_META: Record<TextStyle, string> = { lower: 'Lower third', title: 'หัวเรื่อง', corner: 'ป้ายมุมจอ', comment: 'คอมเมนต์', slate: 'Slate', ticker: 'ตัววิ่ง' };
 
-const addText = (s: Source) => (target?: Target) => addSource({ ...s, id: uid(), props: { ...s.props } }, null, target);
+const textSource = (style: TextStyle, title: string, sub: string, extra: Partial<Props> = {}) =>
+  newSource('text', title, STYLE_META[style], { style, title, sub, ...extra });
+
+/** graphics (everything but a full-screen slate) land on an overlay channel */
+const addText = (s: Source) => (target?: Target) =>
+  addSource({ ...s, id: uid(), props: { ...s.props } }, null, target, s.kind !== 'text' || s.props.style !== 'slate');
 
 const EFFECTS: { id: string; name: string; fx: string; filter: string }[] = [
   { id: 'fx-gray', name: 'ขาวดำ', fx: 'grayscale(1)', filter: 'สี' },
@@ -536,7 +636,7 @@ function tilesFor(cat: Cat): Tile[] {
           run: (t) => addSource(newSource('color', `พื้นสี ${countOf('color')}`, 'สีพื้น', { color: tk('accent-soft') }), null, t),
         },
         { id: 'bars', name: 'Color Bars', badge: 'BARS', filter: 'สัญญาณ', ph: 'c', run: (t) => addSource(newSource('bars', 'Color Bars', 'สัญญาณทดสอบ'), null, t) },
-        { id: 'slate', name: 'Slate ข้อความ', badge: 'SLT', filter: 'สัญญาณ', ph: 'b', run: (t) => addSource(textSource('slate', 'เริ่มรายการเร็ว ๆ นี้', 'โปรดรอสักครู่', { overlay: false, tone: 'panel' }), null, t) },
+        { id: 'slate', name: 'Slate ข้อความ', badge: 'SLT', filter: 'สัญญาณ', ph: 'b', run: (t) => addSource(textSource('slate', 'เริ่มรายการเร็ว ๆ นี้', 'โปรดรอสักครู่', { tone: 'panel' }), null, t) },
         { id: 'clock', name: 'นาฬิกา', badge: 'CLK', filter: 'สัญญาณ', ph: 'a', run: (t) => addSource(newSource('clock', 'นาฬิกา', 'เวลาเครื่องนี้'), null, t) },
         {
           id: 'black', name: 'จอดำ', badge: 'BLK', filter: 'สัญญาณ', ph: 'a',
@@ -558,18 +658,24 @@ function tilesFor(cat: Cat): Tile[] {
         { id: 'g-badge', name: 'ป้ายมุมจอ', badge: 'TAG', filter: 'ข้อความ', ph: 'b', run: addText(textSource('corner', 'LIVE', '', { tone: 'amber' })) },
         {
           id: 'g-logo', name: 'โลโก้มุมจอ', badge: 'PNG', filter: 'รูป', ph: 'b',
-          run: (t) => addMedia('image', 'โลโก้', t, undefined, { overlay: true, fit: 'contain', scale: 0.18, x: 0.82, y: -0.78 }),
+          run: (t) => addMedia('image', 'โลโก้', t, undefined, { fit: 'contain', scale: 0.18, x: 0.82, y: -0.78 }, true),
         },
         {
           id: 'g-full', name: 'รูปเต็มจอ', badge: 'IMG', filter: 'รูป', ph: 'a',
           run: (t) => addMedia('image', 'รูปภาพ', t),
         },
+        { id: 'g-pip', name: 'ภาพซ้อน (PIP)', badge: 'PIP', filter: 'รูป', ph: 'a', run: () => openPipChooser() },
+        { id: 'g-score', name: 'ป้ายคะแนน', badge: 'SCORE', filter: 'ข้อมูล', ph: 'c', run: addText(newSource('score', 'ป้ายคะแนน', 'Scoreboard', { period: 'ครึ่งแรก' })) },
+        { id: 'g-timer', name: 'นับถอยหลัง', badge: 'TIMER', filter: 'ข้อมูล', ph: 'b', run: addText(newSource('timer', 'นับถอยหลัง', 'Timer', { style: 'corner', title: 'เริ่มใน', tone: 'panel' })) },
+        { id: 'g-stopwatch', name: 'จับเวลา', badge: 'TIMER', filter: 'ข้อมูล', ph: 'b', run: addText(newSource('timer', 'จับเวลา', 'Timer', { style: 'corner', timerMode: 'up', tone: 'panel' })) },
+        { id: 'g-ticker', name: 'ตัววิ่งข่าว', badge: 'TICKER', filter: 'ข้อความ', ph: 'c', run: addText(textSource('ticker', 'ตัววิ่งข่าว', 'ข่าวด่วน', { items: 'พิมพ์ข่าวบรรทัดละเรื่อง\nข้อความจะวิ่งต่อกันไปเรื่อย ๆ', tone: 'amber' })) },
       ];
     case 'text':
       return [
         { id: 't-l3', name: 'Lower third', badge: 'L3', filter: '', ph: 'c', run: addText(textSource('lower', 'หัวข้อวันนี้', 'บรรทัดรอง')) },
         { id: 't-title', name: 'หัวเรื่องกลางจอ', badge: 'TTL', filter: '', ph: 'b', run: addText(textSource('title', 'เริ่มในอีกสักครู่', 'ขอบคุณที่รอชม', { tone: 'panel' })) },
         { id: 't-corner', name: 'ข้อความมุมจอ', badge: 'TXT', filter: '', ph: 'a', run: addText(textSource('corner', 'ช่วงถาม-ตอบ', '', { tone: 'panel' })) },
+        { id: 't-ticker', name: 'ตัววิ่งข่าว', badge: 'TICKER', filter: '', ph: 'c', run: addText(textSource('ticker', 'ตัววิ่งข่าว', 'ข่าวด่วน', { items: 'พิมพ์ข่าวบรรทัดละเรื่อง\nข้อความจะวิ่งต่อกันไปเรื่อย ๆ', tone: 'amber' })) },
       ];
     case 'comment':
       return [
@@ -723,10 +829,11 @@ function renderGalleryExtra(): void {
 }
 
 function cardHtml(s: Source, i: number): string {
-  const isPgm = s.props.overlay || scene.pgm === s.id || trans?.to === s.id;
+  const isPgm = ovlOn(s.id) || scene.pgm === s.id || trans?.to === s.id;
   const isPvw = !isPgm && scene.pvw === s.id;
   const word = isPgm ? 'PGM' : isPvw ? 'PVW' : '';
-  const sub = s.props.overlay ? 'ซ้อนบนจอ' : s.kind === 'text' && !s.props.overlay ? `${s.meta} · ซ่อนอยู่` : s.meta;
+  const ch = chOf(s.id);
+  const sub = ch >= 0 ? `Overlay ${ch + 1} · ${scene.overlays[ch].on ? 'ออนแอร์' : 'ซ่อนอยู่'}` : s.meta;
   return `
     <div class="wm-card ${isPgm ? 'is-pgm' : isPvw ? 'is-pvw' : ''} ${ui.selected === s.id ? 'is-selected' : ''}" role="button" tabindex="0" draggable="true"
       data-act="card" data-id="${s.id}" aria-label="${i < 9 ? `${i + 1} ` : ''}${esc(s.name)}${word ? ` ${word}` : ''}">
@@ -753,7 +860,7 @@ function renderTally(): void {
   document.querySelectorAll<HTMLElement>('#strip .wm-card').forEach((el) => {
     const s = byId(el.dataset.id!);
     if (!s) return;
-    const isPgm = s.props.overlay || scene.pgm === s.id || trans?.to === s.id;
+    const isPgm = ovlOn(s.id) || scene.pgm === s.id || trans?.to === s.id;
     const isPvw = !isPgm && scene.pvw === s.id;
     el.classList.toggle('is-pgm', isPgm);
     el.classList.toggle('is-pvw', isPvw);
@@ -779,15 +886,17 @@ function renderTrans(): void {
       <button type="button" class="wm-key wm-key--cut" data-act="cut" id="btn-cut">CUT<small>SPACE</small></button>
       <button type="button" class="wm-key wm-key--auto" data-act="auto" id="btn-auto">AUTO<small>${scene.transition.toUpperCase()} ${(scene.duration / 1000).toFixed(1)}s · ENTER</small></button>
     </div>
+    <div class="ovl-row" id="ovl-row" role="group" aria-label="Overlay 1–8"></div>
     <label class="tbar"><span class="tag">T-BAR</span>
       <input type="range" class="wm-slider" id="tbar" min="0" max="100" step="1" value="${trans?.manual !== undefined ? tbarValue() : tbarBase}" aria-label="T-Bar เลื่อนเพื่อเปลี่ยนภาพเอง"></label>`;
+  renderOverlayRow();
 }
 
 /* ---------- inspector ---------- */
 
 function tallyChip(s?: Source): string {
   if (!s) return '<span id="insp-chip"></span>';
-  if (s.props.overlay || scene.pgm === s.id) return '<span class="wm-chip wm-chip--live" id="insp-chip"><span class="wm-dot"></span>PGM</span>';
+  if (ovlOn(s.id) || scene.pgm === s.id) return '<span class="wm-chip wm-chip--live" id="insp-chip"><span class="wm-dot"></span>PGM</span>';
   if (scene.pvw === s.id) return '<span class="wm-chip wm-chip--ok" id="insp-chip"><span class="wm-dot"></span>PVW</span>';
   return '<span id="insp-chip"></span>';
 }
@@ -822,7 +931,9 @@ function advanced(inner: string): string {
 
 function tabsFor(s: Source): string[] {
   if (s.kind === 'mic' || s.kind === 'audio') return ['เสียง'];
-  if (s.kind === 'text') return ['ข้อความ', 'ภาพ'];
+  if (s.kind === 'text') return ['ข้อความ', 'ภาพ', 'ข้อมูล'];
+  if (s.kind === 'timer') return ['เวลา', 'ภาพ'];
+  if (s.kind === 'score') return ['คะแนน', 'ภาพ', 'ข้อมูล'];
   const t = ['ภาพ'];
   if (s.kind === 'video' || s.kind === 'playlist') t.push('เล่น');
   if (media.get(s.id)?.gain) t.push('เสียง');
@@ -830,18 +941,129 @@ function tabsFor(s: Source): string[] {
   return t;
 }
 
+function textArea(prop: string, label: string, value: string, rows = 4): string {
+  return `<label class="wm-field"><span>${label}</span><textarea class="wm-input wm-textarea" data-prop="${prop}" rows="${rows}">${esc(value)}</textarea></label>`;
+}
+
+function numberField(prop: string, label: string, value: number, mul = 1): string {
+  return `<label class="wm-field"><span>${label}</span><input class="wm-input" type="number" min="0" step="1" data-prop="${prop}" data-mul="${mul}" value="${Math.round(value / mul)}"></label>`;
+}
+
+function overlaySection(s: Source): string {
+  const ch = chOf(s.id);
+  if (ch < 0) {
+    return `<div class="wm-field"><span>Overlay</span><button type="button" class="wm-btn" data-act="ovl-assign">${icon('plus')}ซ้อนบน Program</button></div>`;
+  }
+  return switchRow('ovl', `แสดงบนจอ · Overlay ${ch + 1}`, scene.overlays[ch].on);
+}
+
+function overlayAdvanced(s: Source): string {
+  const ch = chOf(s.id);
+  if (ch < 0) return '';
+  const o = scene.overlays[ch];
+  return `
+    <label class="wm-field"><span>ช่อง Overlay</span><select class="wm-input" data-ovl="ch">${scene.overlays.map((x, i) =>
+      `<option value="${i}" ${i === ch ? 'selected' : ''}>Overlay ${i + 1}${x.src && i !== ch ? ` · ${esc(byId(x.src)?.name ?? '')}` : ''}</option>`).join('')}</select></label>
+    <label class="wm-field"><span>เอฟเฟกต์เข้า-ออก</span><select class="wm-input" data-ovl="fx">${OVERLAY_FX.map(([v, l]) =>
+      `<option value="${v}" ${v === o.fx ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+    ${rangeField('o:dur', 'ระยะเวลาเข้า-ออก', o.dur, 0, 2000, 1, 's', 100)}
+    <button type="button" class="wm-btn wm-btn--sm" data-act="ovl-remove">เอาออกจาก Overlay</button>`;
+}
+
+function presetsField(): string {
+  const list = loadPresets();
+  return `<div class="wm-field"><span>ป้ายที่บันทึกไว้</span><div class="wm-row presets">
+    ${list.map((x, i) => `<span class="preset"><button type="button" class="wm-chip wm-chip--filter" data-act="preset" data-i="${i}">${esc(x.title)}</button><button type="button" class="preset__del" data-act="preset-del" data-i="${i}" aria-label="ลบป้าย ${esc(x.title)}">${icon('close')}</button></span>`).join('')}
+    <button type="button" class="wm-btn wm-btn--sm" data-act="preset-save">${icon('plus')}บันทึกป้ายนี้</button></div></div>`;
+}
+
+function dataStatus(s: Source): string {
+  const st = dataState.get(s.id);
+  if (!s.props.dataUrl) return 'ยังไม่ได้ใส่ลิงก์';
+  if (!st || (st.loading && !st.rows.length)) return 'กำลังโหลด…';
+  if (st.error) return st.error;
+  const n = st.rows.length;
+  return s.kind === 'text' && s.props.style !== 'ticker' ? `แถว ${Math.min(s.props.dataRow, Math.max(0, n - 1)) + 1} / ${n} · อัปเดตทุก 10 วินาที` : `${n} แถว · อัปเดตทุก 10 วินาที`;
+}
+
+function renderDataStatus(): void {
+  const s = byId(ui.selected);
+  const el = document.getElementById('data-status');
+  if (s && el) {
+    el.textContent = dataStatus(s);
+    el.classList.toggle('wm-help--err', !!dataState.get(s.id)?.error);
+  }
+}
+
 function inspectorBody(s: Source): string {
   const p = s.props;
   const tab = ui.tab;
   if (tab === 'ข้อความ') {
+    const comment = p.style === 'comment', ticker = p.style === 'ticker';
     return `
-      ${textField('p:title', s.props.style === 'comment' ? 'ข้อความคอมเมนต์' : 'หัวเรื่อง', p.title)}
-      ${textField('p:sub', s.props.style === 'comment' ? 'ชื่อผู้ชม' : 'บรรทัดรอง', p.sub)}
-      ${switchRow('p:overlay', 'แสดงซ้อนบนจอ', p.overlay)}
+      ${ticker ? textArea('p:items', 'ข้อความวิ่ง (บรรทัดละเรื่อง)', p.items) : textField('p:title', comment ? 'ข้อความคอมเมนต์' : 'หัวเรื่อง', p.title)}
+      ${textField('p:sub', comment ? 'ชื่อผู้ชม' : ticker ? 'ป้ายหัว' : 'บรรทัดรอง', p.sub)}
+      ${p.style === 'slate' ? '' : overlaySection(s)}
       ${segField('p:tone', 'สีแถบ', [['accent', 'น้ำเงิน'], ['panel', 'เข้ม'], ['amber', 'อำพัน']], p.tone)}
+      ${['lower', 'title', 'corner'].includes(p.style) ? presetsField() : ''}
       ${advanced(`
-        ${segField('p:style', 'รูปแบบ', [['lower', 'แถบล่าง'], ['title', 'กลางจอ'], ['corner', 'มุมจอ'], ['comment', 'คอมเมนต์']], p.style)}
-        ${textField('n:name', 'ชื่อในแถบการ์ด', s.name)}`)}`;
+        ${segField('p:style', 'รูปแบบ', [['lower', 'แถบล่าง'], ['title', 'กลางจอ'], ['corner', 'มุมจอ'], ['comment', 'คอมเมนต์'], ['ticker', 'ตัววิ่ง']], p.style)}
+        ${ticker ? segField('p:speed', 'ความเร็ว', [['60', 'ช้า'], ['90', 'ปกติ'], ['130', 'เร็ว'], ['180', 'เร็วมาก']], String(p.speed), true) : ''}
+        ${textField('n:name', 'ชื่อในแถบการ์ด', s.name)}
+        ${overlayAdvanced(s)}`)}`;
+  }
+  if (tab === 'เวลา') {
+    const running = !!p.timerStart;
+    return `
+      <div class="timer-big" id="timer-val">${fmtClock(timerValue(s))}</div>
+      <div class="wm-row">
+        <button type="button" class="wm-btn wm-btn--primary" data-act="timer-run">${icon(running ? 'pause' : 'play')}${running ? 'หยุด' : 'เริ่ม'}</button>
+        <button type="button" class="wm-btn" data-act="timer-reset">${icon('refresh')}เริ่มใหม่</button>
+      </div>
+      ${segField('p:timerMode', 'โหมด', [['down', 'นับถอยหลัง'], ['up', 'จับเวลา']], p.timerMode)}
+      ${p.timerMode === 'down' ? numberField('p:timerDur', 'ระยะเวลา (นาที)', p.timerDur, 60_000) : ''}
+      ${textField('p:title', 'ป้ายกำกับ', p.title, 'เช่น เริ่มใน')}
+      ${overlaySection(s)}
+      ${advanced(`
+        ${segField('p:style', 'ตำแหน่ง', [['corner', 'มุมจอ'], ['title', 'กลางจอ']], p.style === 'title' ? 'title' : 'corner')}
+        ${segField('p:tone', 'สีพื้น', [['panel', 'เข้ม'], ['accent', 'น้ำเงิน'], ['amber', 'อำพัน']], p.tone)}
+        ${textField('n:name', 'ชื่อ', s.name)}
+        ${overlayAdvanced(s)}`)}`;
+  }
+  if (tab === 'คะแนน') {
+    const team = (k: 'A' | 'B') => `
+      <div class="score-row">
+        <input class="wm-input" data-prop="p:team${k}" value="${esc(k === 'A' ? p.teamA : p.teamB)}" aria-label="ชื่อทีม ${k}">
+        <button type="button" class="wm-btn wm-btn--icon" data-act="score" data-team="${k}" data-d="-1" aria-label="ลดคะแนนทีม ${k}">−</button>
+        <output class="score-val">${k === 'A' ? p.scoreA : p.scoreB}</output>
+        <button type="button" class="wm-btn wm-btn--icon wm-btn--primary" data-act="score" data-team="${k}" data-d="1" aria-label="เพิ่มคะแนนทีม ${k}">+</button>
+      </div>`;
+    return `
+      <div class="wm-field"><span>ทีมและคะแนน</span>${team('A')}${team('B')}</div>
+      ${textField('p:period', 'ช่วงเวลา', p.period, 'เช่น ครึ่งแรก, Q3')}
+      ${overlaySection(s)}
+      ${advanced(`
+        <div class="wm-row">
+          <label class="wm-field grow"><span>สีทีม A</span><input type="color" class="wm-color" data-prop="p:colorA" value="${esc(p.colorA || tk('accent'))}"></label>
+          <label class="wm-field grow"><span>สีทีม B</span><input type="color" class="wm-color" data-prop="p:colorB" value="${esc(p.colorB || tk('pgm-fill'))}"></label>
+        </div>
+        <button type="button" class="wm-btn wm-btn--sm" data-act="score-reset">${icon('refresh')}ล้างคะแนน</button>
+        ${textField('n:name', 'ชื่อ', s.name)}
+        ${overlayAdvanced(s)}`)}`;
+  }
+  if (tab === 'ข้อมูล') {
+    const rowNav = s.kind === 'text' && p.style !== 'ticker';
+    return `
+      ${textField('p:dataUrl', 'ลิงก์ Google Sheets หรือ CSV', p.dataUrl, 'https://docs.google.com/spreadsheets/d/…')}
+      ${switchRow('p:dataHeader', 'แถวแรกเป็นหัวตาราง (ไม่นำมาแสดง)', p.dataHeader)}
+      <p class="wm-help" id="data-status">${esc(dataStatus(s))}</p>
+      ${rowNav ? `<div class="wm-row">
+        <button type="button" class="wm-btn" data-act="data-row" data-d="-1">${icon('prev')}แถวก่อน</button>
+        <button type="button" class="wm-btn" data-act="data-row" data-d="1">แถวถัดไป${icon('next')}</button></div>` : ''}
+      <button type="button" class="wm-btn wm-btn--sm" data-act="data-refresh">${icon('refresh')}โหลดเดี๋ยวนี้</button>
+      <p class="wm-note">${s.kind === 'score' ? 'แถวแรก: ชื่อทีม A, คะแนน A, ชื่อทีม B, คะแนน B, ช่วงเวลา'
+        : p.style === 'ticker' ? 'คอลัมน์ A ของทุกแถว = ข้อความที่วิ่ง' : 'คอลัมน์ A = หัวเรื่อง, B = บรรทัดรอง · เลื่อนแถวเพื่อเปลี่ยนชื่อบนจอ'}
+        · ชีตต้องแชร์แบบ "ทุกคนที่มีลิงก์ดูได้"</p>`;
   }
   if (tab === 'เสียง') {
     return `
@@ -875,21 +1097,33 @@ function inspectorBody(s: Source): string {
       <div class="wm-field"><span>เอฟเฟกต์</span><div class="wm-row">
         <button type="button" class="wm-chip wm-chip--filter" data-act="seg" data-prop="p:filter" data-val="" aria-pressed="${!p.filter}">ไม่มี</button>
         ${EFFECTS.map((e) => `<button type="button" class="wm-chip wm-chip--filter" data-act="seg" data-prop="p:filter" data-val="${e.fx}" aria-pressed="${p.filter === e.fx}">${e.name}</button>`).join('')}
-      </div></div>`;
+      </div></div>
+      ${needsMedia(s.kind) ? `
+        ${segField('p:key', 'คีย์ฉาก (Chroma key)', [['off', 'ปิด'], ['green', 'ฉากเขียว'], ['blue', 'ฉากฟ้า']], p.key)}
+        ${p.key !== 'off' ? rangeField('p:keyTol', 'ความไวของคีย์', p.keyTol, 10, 200, 1, '') : ''}` : ''}`;
   }
   // ภาพ
+  const pic = needsMedia(s.kind);
   return `
     ${rangeField('p:scale', 'ขนาด', p.scale, 10, 300)}
     ${rangeField('p:opacity', 'ความโปร่งใส', p.opacity, 0, 100)}
     ${switchRow('p:flip', 'กลับด้านภาพ', p.flip)}
-    ${switchRow('p:overlay', 'แสดงซ้อนบนจอ', p.overlay)}
+    ${s.kind === 'text' && p.style === 'slate' ? '' : overlaySection(s)}
     ${s.kind === 'color' ? `<label class="wm-field"><span>สีพื้น</span><input type="color" class="wm-color" data-prop="p:color" value="${esc(p.color)}"></label>` : ''}
     ${advanced(`
-      ${needsMedia(s.kind) ? segField('p:fit', 'การจัดภาพ', [['cover', 'เต็มจอ'], ['contain', 'พอดีจอ']], p.fit) : ''}
+      ${pic ? segField('p:fit', 'การจัดภาพ', [['cover', 'เต็มจอ'], ['contain', 'พอดีจอ']], p.fit) : ''}
       ${s.kind === 'camera' ? segField('p:res', 'ความละเอียดกล้อง', [['720p', '720p'], ['1080p', '1080p'], ['2160p', '4K']], p.res) : ''}
       ${rangeField('p:x', 'ตำแหน่งแนวนอน', p.x, -100, 100, 100, '')}
       ${rangeField('p:y', 'ตำแหน่งแนวตั้ง', p.y, -100, 100, 100, '')}
+      ${pic ? `
+        ${rangeField('p:cropL', 'ครอปซ้าย', p.cropL, 0, 45)}
+        ${rangeField('p:cropR', 'ครอปขวา', p.cropR, 0, 45)}
+        ${rangeField('p:cropT', 'ครอปบน', p.cropT, 0, 45)}
+        ${rangeField('p:cropB', 'ครอปล่าง', p.cropB, 0, 45)}
+        ${rangeField('p:border', 'ขอบ', p.border, 0, 16, 1, 'px')}
+        ${p.border ? segField('p:borderTone', 'สีขอบ', [['accent', 'น้ำเงิน'], ['text', 'ขาว'], ['amber', 'อำพัน']], p.borderTone) : ''}` : ''}
       ${textField('n:name', 'ชื่อ', s.name)}
+      ${overlayAdvanced(s)}
       <button type="button" class="wm-btn wm-btn--sm" data-act="reset-props">${icon('refresh')}คืนค่าเริ่มต้น</button>`)}`;
 }
 
@@ -931,7 +1165,7 @@ function renderInspector(): void {
       ${missing ? `<div class="notice"><p>${esc(s.name)} ยังไม่มีสัญญาณ</p><button type="button" class="wm-btn wm-btn--primary" data-act="reconnect">${icon('refresh')}เชื่อมต่อใหม่</button></div>` : ''}
       ${inspectorBody(s)}
       <div class="wm-row insp-actions">
-        ${isVisual(s.kind) && !s.props.overlay ? `<button type="button" class="wm-btn" data-act="send-pvw">ส่งไป PVW</button>` : ''}
+        ${isVisual(s.kind) && !isGraphic(s.id) ? `<button type="button" class="wm-btn" data-act="send-pvw">ส่งไป PVW</button>` : ''}
         <button type="button" class="wm-btn" data-act="delete">${icon('trash')}ลบ</button>
         <button type="button" class="wm-btn wm-btn--ghost" data-act="deselect">ปรับเอาต์พุต</button>
       </div>
@@ -939,6 +1173,7 @@ function renderInspector(): void {
 }
 
 function renderAll(): void {
+  renderOverlayRow();
   renderRail();
   renderGallery();
   renderStrip();
@@ -951,6 +1186,69 @@ function renderAll(): void {
   if (name && document.activeElement !== name) name.value = scene.projectName;
   document.body.classList.toggle('gallery-open', ui.galleryOpen);
   document.body.classList.toggle('insp-open', ui.inspOpen);
+}
+
+/* ================= live data (Sheets / CSV) ================= */
+
+function pollData(force = false): void {
+  const now = Date.now();
+  for (const s of scene.sources) {
+    const url = s.props.dataUrl.trim();
+    if (!url) {
+      dataState.delete(s.id);
+      continue;
+    }
+    let st = dataState.get(s.id);
+    if (!st || st.url !== url) {
+      st = { rows: [], error: '', at: 0, loading: false, url };
+      dataState.set(s.id, st);
+    }
+    if (st.loading || (!force && now - st.at < REFRESH_MS)) continue;
+    st.at = now;
+    if (!/^https?:\/\/\S+\.\S+/i.test(url)) {
+      st.error = 'ลิงก์ต้องขึ้นต้นด้วย https://';
+      renderDataStatus();
+      continue;
+    }
+    const state = st;
+    state.loading = true;
+    fetchRows(url, s.props.dataHeader)
+      .then((rows) => {
+        state.rows = rows;
+        state.error = '';
+        applyData(s.id);
+      })
+      .catch((e: unknown) => {
+        state.error = e instanceof Error && e.message !== 'Failed to fetch' ? e.message : 'ดึงข้อมูลไม่ได้ ตรวจลิงก์และการแชร์ชีต';
+      })
+      .finally(() => {
+        state.loading = false;
+        renderDataStatus();
+      });
+  }
+}
+
+function applyData(id: string): void {
+  const s = byId(id);
+  const rows = dataState.get(id)?.rows ?? [];
+  if (!s || !rows.length) return;
+  const p = s.props;
+  if (s.kind === 'score') {
+    const r = rows[0];
+    const num = (v: string | undefined, d: number) => (v === undefined || v === '' ? d : Math.max(0, parseInt(v, 10) || 0));
+    Object.assign(p, { teamA: r[0] || p.teamA, scoreA: num(r[1], p.scoreA), teamB: r[2] || p.teamB, scoreB: num(r[3], p.scoreB), period: r[4] ?? p.period });
+  } else if (s.kind === 'text' && p.style === 'ticker') {
+    p.items = rows.map((r) => r[0]).filter(Boolean).slice(0, 100).join('\n');
+  } else if (s.kind === 'text') {
+    p.dataRow = Math.min(Math.max(0, p.dataRow), rows.length - 1);
+    const r = rows[p.dataRow];
+    p.title = r[0] ?? '';
+    p.sub = r[1] ?? '';
+    if (p.title) s.name = p.title;
+  }
+  changed(false);
+  // refresh the inspector only when nobody is typing in it
+  if (ui.selected === id && !$('#insp').contains(document.activeElement)) renderInspector();
 }
 
 /* ================= toast & dialogs ================= */
@@ -995,6 +1293,27 @@ function openChooser(cat: Cat): void {
   d.querySelectorAll<HTMLElement>('[data-choose]').forEach((b) => b.addEventListener('click', () => {
     d.close();
     void tiles.find((t) => t.id === b.dataset.choose)?.run();
+  }));
+}
+
+function openPipChooser(): void {
+  const list = visuals().filter((s) => !isGraphic(s.id) && needsMedia(s.kind));
+  if (!list.length) return toast('เพิ่มกล้อง หน้าจอ หรือวิดีโอก่อน แล้วเลือกเป็นภาพซ้อน');
+  const d = openDialog('เลือกภาพซ้อน (PIP)', `<p class="wm-note">ภาพที่เลือกจะย่อลงมุมขวาล่างและขึ้นเป็น Overlay ปรับตำแหน่ง ครอป และขอบได้ในแผงขวา</p>
+    <div class="chooser">${list.map((s) => `<button type="button" class="wm-btn wm-btn--lg" data-pip="${s.id}">${icon('source')}${esc(s.name)}</button>`).join('')}</div>`,
+  '<button class="wm-btn" value="close">ปิด</button>');
+  d.querySelectorAll<HTMLElement>('[data-pip]').forEach((b) => b.addEventListener('click', () => {
+    d.close();
+    const id = b.dataset.pip!;
+    mutate((sc) => {
+      const t = sc.sources.find((x) => x.id === id);
+      if (t) Object.assign(t.props, { scale: 0.32, x: 0.58, y: 0.5, border: 4, fit: 'cover' });
+    });
+    assignOverlay(id);
+    const ch = chOf(id);
+    if (ch >= 0) setOverlay(ch, true);
+    select(id);
+    renderInspector();
   }));
 }
 
@@ -1114,6 +1433,7 @@ const pgmCtx = $<HTMLCanvasElement>('#cv-pgm').getContext('2d')!;
 let lastThumb = 0;
 let lastChip = 0;
 let lastFrame = performance.now();
+let lastPoll = 0;
 
 function renderTransport(): void {
   const el = media.get(ui.selected ?? '')?.el;
@@ -1142,8 +1462,9 @@ function frame(now: number): void {
     ftb.level = ftb.target > ftb.level ? Math.min(1, ftb.level + step) : Math.max(0, ftb.level - step);
   }
   lastFrame = now;
-  drawBus(pgmCtx, scene, scene.pgm, trans, now, ftb.level);
-  drawBus(pvwCtx, scene, scene.pvw, null, now);
+  const ls = layers(now);
+  drawBus(pgmCtx, scene, scene.pgm, trans, now, ftb.level, ls);
+  drawBus(pvwCtx, scene, scene.pvw, null, now, 0, ls);
   updateGains(scene, onAir);
   paintWindows(pgmCtx.canvas, pvwCtx.canvas, scene, now);
 
@@ -1163,6 +1484,13 @@ function frame(now: number): void {
   document.querySelectorAll<HTMLElement>('[data-meter]').forEach((el) => {
     el.style.width = `${level(media.get(el.dataset.meter!)?.analyser) * 100}%`;
   });
+  if (now - lastPoll > 1000) {
+    lastPoll = now;
+    pollData();
+    const tv = document.getElementById('timer-val');
+    const ts = byId(ui.selected);
+    if (tv && ts?.kind === 'timer') tv.textContent = fmtClock(timerValue(ts));
+  }
   if (ui.recorder && now - lastChip > 500) {
     lastChip = now;
     const t = document.getElementById('rec-time');
@@ -1178,6 +1506,11 @@ function setProp(path: string, value: unknown, live: boolean): void {
   mutate((sc) => {
     if (scope === 'g') {
       (sc as unknown as Record<string, unknown>)[key] = value;
+      return;
+    }
+    if (scope === 'o') {
+      const ch = sc.overlays.findIndex((o) => o.src === ui.selected);
+      if (ch >= 0) (sc.overlays[ch] as unknown as Record<string, unknown>)[key] = value;
       return;
     }
     const s = sc.sources.find((x) => x.id === ui.selected);
@@ -1251,14 +1584,11 @@ const actions: Record<string, (el: HTMLElement, e: MouseEvent) => void> = {
     const prop = el.dataset.prop!;
     const on = el.getAttribute('aria-checked') !== 'true';
     if (prop === 'ftb') return toggleFtb();
+    if (prop === 'ovl') return ui.selected ? toggleOverlay(ui.selected) : undefined;
     setProp(prop, on, false);
     if (prop === 'p:loop' && ui.selected) {
       const m = media.get(ui.selected);
       if (m?.el instanceof HTMLVideoElement && !m.list) m.el.loop = on;
-    }
-    if (prop === 'p:overlay') {
-      const s = byId(ui.selected);
-      if (s && on) mutateBusAfterOverlay(s.id);
     }
   },
   seg: (el) => {
@@ -1267,6 +1597,94 @@ const actions: Record<string, (el: HTMLElement, e: MouseEvent) => void> = {
     if (prop === 'p:res' && ui.selected) void reconnect(ui.selected);
   },
   ftb: toggleFtb,
+  ovl: (el) => {
+    const i = Number(el.dataset.i);
+    setOverlay(i, !scene.overlays[i].on);
+  },
+  'ovl-assign': () => {
+    if (!ui.selected) return;
+    assignOverlay(ui.selected);
+    renderInspector();
+  },
+  'ovl-remove': () => {
+    if (!ui.selected) return;
+    unassignOverlay(ui.selected);
+    renderInspector();
+  },
+  'timer-run': () => {
+    const t = byId(ui.selected);
+    if (!t) return;
+    const p = t.props;
+    if (p.timerStart) {
+      p.timerAcc += Date.now() - p.timerStart;
+      p.timerStart = 0;
+    } else {
+      if (p.timerMode === 'down' && timerValue(t) <= 0) p.timerAcc = 0;
+      p.timerStart = Date.now();
+    }
+    changed(false);
+    renderInspector();
+  },
+  'timer-reset': () => {
+    const t = byId(ui.selected);
+    if (!t) return;
+    t.props.timerAcc = 0;
+    if (t.props.timerStart) t.props.timerStart = Date.now();
+    changed(false);
+    renderInspector();
+  },
+  score: (el) => {
+    const t = byId(ui.selected);
+    if (!t) return;
+    const key = el.dataset.team === 'B' ? 'scoreB' : 'scoreA';
+    t.props[key] = Math.max(0, t.props[key] + Number(el.dataset.d));
+    changed(false);
+    renderInspector();
+  },
+  'score-reset': () => {
+    const t = byId(ui.selected);
+    if (!t) return;
+    mutate((sc) => {
+      const x = sc.sources.find((y) => y.id === t.id);
+      if (x) Object.assign(x.props, { scoreA: 0, scoreB: 0 });
+    }, { toast: 'ล้างคะแนนแล้ว' });
+  },
+  'preset-save': () => {
+    const t = byId(ui.selected);
+    if (!t || !t.props.title.trim()) return toast('พิมพ์หัวเรื่องก่อน แล้วบันทึกป้าย');
+    const list = loadPresets().filter((x) => x.title !== t.props.title || x.sub !== t.props.sub);
+    savePresets([{ title: t.props.title, sub: t.props.sub, tone: t.props.tone }, ...list]);
+    toast(`บันทึกป้าย ${t.props.title} แล้ว`);
+    renderInspector();
+  },
+  preset: (el) => {
+    const x = loadPresets()[Number(el.dataset.i)];
+    const id = ui.selected;
+    if (!x || !id) return;
+    mutate((sc) => {
+      const t = sc.sources.find((y) => y.id === id);
+      if (t) {
+        Object.assign(t.props, { title: x.title, sub: x.sub, tone: x.tone });
+        t.name = x.title;
+      }
+    }, { toast: `เปลี่ยนเป็น ${x.title} แล้ว` });
+  },
+  'preset-del': (el) => {
+    const list = loadPresets();
+    const [gone] = list.splice(Number(el.dataset.i), 1);
+    savePresets(list);
+    renderInspector();
+    if (gone) toast(`ลบป้าย ${gone.title} แล้ว`, { label: 'ย้อนกลับ', run: () => { savePresets([gone, ...loadPresets()]); renderInspector(); } });
+  },
+  'data-refresh': () => pollData(true),
+  'data-row': (el) => {
+    const t = byId(ui.selected);
+    const rows = t ? dataState.get(t.id)?.rows ?? [] : [];
+    if (!t || !rows.length) return toast('ยังไม่มีข้อมูลจากชีต ตรวจลิงก์ก่อน');
+    t.props.dataRow = (t.props.dataRow + Number(el.dataset.d) + rows.length) % rows.length;
+    applyData(t.id);
+    renderInspector();
+  },
   play: () => {
     const el = media.get(ui.selected ?? '')?.el;
     if (!(el instanceof HTMLVideoElement)) return;
@@ -1318,7 +1736,7 @@ const actions: Record<string, (el: HTMLElement, e: MouseEvent) => void> = {
     if (!s) return;
     mutate((sc) => {
       const t = sc.sources.find((x) => x.id === s.id);
-      if (t) Object.assign(t.props, { scale: 1, opacity: 1, flip: false, x: 0, y: 0, filter: '' });
+      if (t) Object.assign(t.props, { scale: 1, opacity: 1, flip: false, x: 0, y: 0, filter: '', cropL: 0, cropR: 0, cropT: 0, cropB: 0, border: 0, key: 'off' });
     }, { toast: `คืนค่าเริ่มต้นของ ${s.name} แล้ว` });
   },
   delete: () => ui.selected && removeSource(ui.selected),
@@ -1355,7 +1773,7 @@ const actions: Record<string, (el: HTMLElement, e: MouseEvent) => void> = {
 function mutateBusAfterOverlay(id: string): void {
   // an overlay is not a bus source: hand its bus slot to something else
   if (scene.pgm === id || scene.pvw === id) {
-    const rest = visuals().filter((x) => !x.props.overlay);
+    const rest = visuals().filter((x) => !isGraphic(x.id));
     if (scene.pgm === id) scene.pgm = rest[0]?.id ?? null;
     if (scene.pvw === id) scene.pvw = rest.find((x) => x.id !== scene.pgm)?.id ?? null;
     changed(false);
@@ -1405,6 +1823,10 @@ document.addEventListener('input', (e) => {
   }
   const prop = t.dataset.prop;
   if (!prop || t.closest('dialog')) return;
+  if (t.type === 'number') {
+    setProp(prop, Math.max(0, Number(t.value) || 0) * Number(t.dataset.mul ?? 1), true);
+    return;
+  }
   if (t.type === 'range') {
     const div = Number(t.dataset.div ?? 1);
     setProp(prop, Number(t.value) / div, true);
@@ -1418,6 +1840,21 @@ document.addEventListener('input', (e) => {
       if (title && s) title.textContent = s.name;
     }
   }
+});
+
+document.addEventListener('change', (e) => {
+  const t = e.target as HTMLSelectElement;
+  const id = ui.selected;
+  if (!t.dataset.ovl || !id) return;
+  if (t.dataset.ovl === 'ch') {
+    assignOverlay(id, Number(t.value));
+  } else {
+    mutate((sc) => {
+      const o = sc.overlays.find((x) => x.src === id);
+      if (o) o.fx = t.value as OverlayFx;
+    });
+  }
+  renderInspector();
 });
 
 document.addEventListener('keydown', (e) => {
@@ -1454,10 +1891,17 @@ document.addEventListener('keydown', (e) => {
     return auto();
   }
   if (e.key === 'b' || e.key === 'B') return toggleFtb();
+  const digit = /^Digit([1-8])$/.exec(e.code);
+  if (digit && e.shiftKey) {
+    e.preventDefault();
+    const i = Number(digit[1]) - 1;
+    if (!scene.overlays[i].src) return toast(`Overlay ${i + 1} ยังว่าง เลือกกราฟิกแล้วตั้งช่องในแผงขวา`);
+    return setOverlay(i, !scene.overlays[i].on);
+  }
   if (/^[1-9]$/.test(e.key)) {
     const s = cutSources()[Number(e.key) - 1];
     if (!s) return;
-    if (s.props.overlay) return toggleOverlay(s.id);
+    if (isGraphic(s.id)) return toggleOverlay(s.id);
     const now = performance.now();
     const again = lastKey.key === e.key && now - lastKey.t < 1000;
     lastKey = { key: again ? '' : e.key, t: now };

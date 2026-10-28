@@ -121,7 +121,7 @@ export function paintWindows(pgm: HTMLCanvasElement, pvw: HTMLCanvasElement, sce
           drawSource(ctx, s, cw, ch);
         }
         ctx.restore();
-        const tone = s && (scene.pgm === s.id || s.props.overlay) ? 'pgm' : s && scene.pvw === s.id ? 'pvw' : null;
+        const tone = s && (scene.pgm === s.id || scene.overlays.some((o) => o.on && o.src === s.id)) ? 'pgm' : s && scene.pvw === s.id ? 'pvw' : null;
         frame(ctx, x, y, cw, ch, tone);
         if (s) label(ctx, `${i + 1}  ${s.name}`, x, y + ch, cw, tone);
       }
