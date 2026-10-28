@@ -958,6 +958,8 @@ function meterHtml(id: string, wide = false): string {
   return `<span class="meter${wide ? ' meter--wide' : ''}" data-meterbox="${id}"><i data-meter="${id}"></i><b class="meter__peak" data-peak="${id}"></b></span>`;
 }
 
+const coarse = () => matchMedia('(pointer: coarse)').matches;
+
 function cardHtml(s: Source, i: number): string {
   const isPgm = ovlOn(s.id) || scene.pgm === s.id || trans?.to === s.id;
   const isPvw = !isPgm && scene.pvw === s.id;
@@ -965,8 +967,8 @@ function cardHtml(s: Source, i: number): string {
   const ch = chOf(s.id);
   const sub = ch >= 0 ? `Overlay ${ch + 1} · ${scene.overlays[ch].on ? 'ออนแอร์' : 'ซ่อนอยู่'}` : s.kind === 'video' || s.kind === 'playlist' ? playbackLine(s) : s.meta;
   return `
-    <div class="wm-card ${isPgm ? 'is-pgm' : isPvw ? 'is-pvw' : ''} ${ui.selected === s.id ? 'is-selected' : ''}" role="button" tabindex="0" draggable="true"
-      data-act="card" data-id="${s.id}" aria-label="${i < 9 ? `${i + 1} ` : ''}${esc(s.name)}${word ? ` ${word}` : ''}">
+    <div class="wm-card ${isPgm ? 'is-pgm' : isPvw ? 'is-pvw' : ''} ${ui.selected === s.id ? 'is-selected' : ''}" role="button" tabindex="0" draggable="${!coarse()}"
+      data-act="card" data-id="${s.id}" aria-haspopup="menu" aria-label="${i < 9 ? `${i + 1} ` : ''}${esc(s.name)}${word ? ` ${word}` : ''}">
       <div class="wm-card__pic"><canvas data-thumb="${s.id}" width="192" height="108"></canvas>
         ${i < 9 ? `<span class="wm-card__num">${i + 1}</span>` : ''}${word ? `<span class="wm-card__tally">${word}</span>` : ''}</div>
       <div class="wm-card__foot"><div class="wm-card__name">${esc(s.name)}</div><div class="wm-card__sub">${esc(sub)}</div></div>
@@ -976,7 +978,7 @@ function cardHtml(s: Source, i: number): string {
 function renderStrip(): void {
   const vis = cutSources();
   $('#strip').innerHTML = `${vis.map(cardHtml).join('')}
-    <div class="drop">${vis.length ? 'ลากจากแกลเลอรีมาวางที่นี่' : 'ยังไม่มีแหล่งภาพ แตะ + ในแกลเลอรีเพื่อเพิ่ม'}</div>`;
+    <div class="drop">${vis.length ? `${coarse() ? 'กดค้างที่การ์ด' : 'คลิกขวาที่การ์ด'}เพื่อซ้อนบนจอหรือดูคำสั่งอื่น` : 'ยังไม่มีแหล่งภาพ แตะ + ในแกลเลอรีเพื่อเพิ่ม'}</div>`;
   lastThumb = 0;
 }
 
@@ -1397,6 +1399,137 @@ function applyData(id: string): void {
   changed(false);
   // refresh the inspector only when nobody is typing in it
   if (ui.selected === id && !$('#insp').contains(document.activeElement)) renderInspector();
+}
+
+/* ================= card menu (long press / right click) ================= */
+
+let menuFor: string | null = null;
+/** a long press just opened the menu: swallow the click that follows */
+let menuSwallowClick = false;
+
+function closeCardMenu(): void {
+  document.getElementById('card-menu')?.remove();
+  document.body.classList.remove('menu-open');
+  const was = menuFor;
+  menuFor = null;
+  if (was) document.querySelector<HTMLElement>(`#strip .wm-card[data-id="${was}"]`)?.classList.remove('is-held');
+}
+
+function openCardMenu(id: string): void {
+  const s = byId(id);
+  const card = document.querySelector<HTMLElement>(`#strip .wm-card[data-id="${id}"]`);
+  if (!s || !card) return;
+  closeCardMenu();
+  menuFor = id;
+  card.classList.add('is-held');
+  const ch = chOf(id);
+  const on = ch >= 0 && scene.overlays[ch].on;
+  const slate = s.kind === 'text' && s.props.style === 'slate';
+  const el = document.createElement('div');
+  el.id = 'card-menu';
+  el.className = 'card-menu';
+  el.setAttribute('role', 'menu');
+  el.setAttribute('aria-label', `คำสั่งของ ${s.name}`);
+  el.innerHTML = `
+    <div class="card-menu__head"><b>${esc(s.name)}</b>${tallyChip(s).replace(' id="insp-chip"', '')}
+      <button type="button" class="wm-btn wm-btn--icon wm-btn--ghost" data-menu="close" aria-label="ปิด">${icon('close')}</button></div>
+    ${slate ? '' : `<p class="card-menu__label">${ch >= 0 ? `อยู่ที่ Overlay ${ch + 1} · แตะช่องอื่นเพื่อย้าย` : 'ซ้อนบน Program ที่ช่อง'}</p>
+    <div class="card-menu__grid">${scene.overlays.map((o, i) => {
+      const who = byId(o.src);
+      const mine = o.src === id;
+      return `<button type="button" role="menuitem" class="ovl-pick${mine ? ' is-mine' : ''}${o.on ? ' is-on' : ''}" data-menu="ch" data-i="${i}" aria-pressed="${mine}"
+        aria-label="Overlay ${i + 1}${who ? ` (ตอนนี้ ${esc(who.name)})` : ' ว่าง'}"><b>${i + 1}</b><span>${mine ? (o.on ? 'ออนแอร์' : 'ซ่อนอยู่') : who ? esc(who.name) : 'ว่าง'}</span></button>`;
+    }).join('')}</div>`}
+    <div class="card-menu__actions">
+      ${ch >= 0 ? `<button type="button" role="menuitem" class="wm-btn ${on ? 'wm-btn--live' : 'wm-btn--primary'}" data-menu="toggle">${on ? 'เอาลงจากจอ' : 'ขึ้นจอ'}</button>
+        <button type="button" role="menuitem" class="wm-btn" data-menu="unassign">เอาออกจาก Overlay</button>`
+      : `<button type="button" role="menuitem" class="wm-btn" data-menu="pvw">ส่งไป PVW</button>
+        <button type="button" role="menuitem" class="wm-btn" data-menu="cut">CUT ขึ้น PGM</button>`}
+      <button type="button" role="menuitem" class="wm-btn" data-menu="edit">${icon('sliders')}ปรับค่า</button>
+      <button type="button" role="menuitem" class="wm-btn" data-menu="delete">${icon('trash')}ลบ</button>
+    </div>`;
+  document.body.append(el);
+  document.body.classList.add('menu-open');
+  // float above the card on wide screens; on phones the CSS turns it into a bottom sheet
+  if (!matchMedia('(max-width: 767px)').matches) {
+    const r = card.getBoundingClientRect();
+    const w = el.offsetWidth, h = el.offsetHeight;
+    el.style.left = `${Math.max(8, Math.min(innerWidth - w - 8, r.left + r.width / 2 - w / 2))}px`;
+    el.style.top = `${Math.max(8, r.top - h - 8)}px`;
+  }
+  el.querySelector<HTMLElement>('[aria-pressed="true"], [role="menuitem"]')?.focus();
+  el.addEventListener('click', (e) => {
+    const b = (e.target as Element).closest<HTMLElement>('[data-menu]');
+    if (!b) return;
+    const act = b.dataset.menu;
+    closeCardMenu();
+    if (act === 'ch') {
+      const i = Number(b.dataset.i);
+      if (scene.overlays[i].src === id) return setOverlay(i, !scene.overlays[i].on);
+      assignOverlay(id, i);
+      setOverlay(i, true);
+      select(id);
+      renderInspector();
+    } else if (act === 'toggle') toggleOverlay(id);
+    else if (act === 'unassign') unassignOverlay(id);
+    else if (act === 'pvw') toPreview(id);
+    else if (act === 'cut') cutTo(id);
+    else if (act === 'edit') {
+      select(id);
+      ui.inspOpen = true;
+      renderInspector();
+      renderStrip();
+      document.body.classList.add('insp-open');
+    } else if (act === 'delete') removeSource(id);
+  });
+}
+
+// long press on touch (and pen / mouse held), right click with a mouse, the menu key on a focused card
+{
+  let timer = 0;
+  let start: { x: number; y: number; id: string } | null = null;
+  const strip = $('#strip');
+  strip.addEventListener('pointerdown', (e) => {
+    menuSwallowClick = false;
+    const card = (e.target as Element).closest<HTMLElement>('.wm-card[data-id]');
+    if (!card || e.button !== 0) return;
+    start = { x: e.clientX, y: e.clientY, id: card.dataset.id! };
+    window.clearTimeout(timer);
+    timer = window.setTimeout(() => {
+      if (!start) return;
+      menuSwallowClick = true;
+      navigator.vibrate?.(15);
+      openCardMenu(start.id);
+      start = null;
+    }, 500);
+  });
+  const cancel = () => {
+    window.clearTimeout(timer);
+    start = null;
+  };
+  strip.addEventListener('pointermove', (e) => {
+    if (start && Math.hypot(e.clientX - start.x, e.clientY - start.y) > 10) cancel();
+  });
+  strip.addEventListener('pointerup', cancel);
+  strip.addEventListener('pointercancel', cancel);
+  strip.addEventListener('dragstart', cancel);
+  strip.addEventListener('contextmenu', (e) => {
+    const card = (e.target as Element).closest<HTMLElement>('.wm-card[data-id]');
+    if (!card) return;
+    e.preventDefault();
+    cancel();
+    if (menuFor !== card.dataset.id) openCardMenu(card.dataset.id!);
+  });
+  strip.addEventListener('keydown', (e) => {
+    const card = (e.target as Element).closest<HTMLElement>('.wm-card[data-id]');
+    if (card && (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10'))) {
+      e.preventDefault();
+      openCardMenu(card.dataset.id!);
+    }
+  });
+  document.addEventListener('pointerdown', (e) => {
+    if (menuFor && !(e.target as Element).closest('#card-menu, #strip .wm-card.is-held')) closeCardMenu();
+  }, true);
 }
 
 /* ================= toast & dialogs ================= */
@@ -1887,6 +2020,10 @@ const actions: Record<string, (el: HTMLElement, e: MouseEvent) => void> = {
   tile: (el) => void tilesFor(ui.cat).find((t) => t.id === el.dataset.tile)?.run(),
   card: (el) => {
     const id = el.dataset.id!;
+    if (menuSwallowClick) {
+      menuSwallowClick = false;
+      return;
+    }
     const now = performance.now();
     if (lastTap.id === id && now - lastTap.t < 350) {
       lastTap = { id: '', t: 0 };
@@ -2146,7 +2283,10 @@ document.addEventListener('click', (e) => {
   }
 });
 
-$('#scrim').addEventListener('click', closeSheets);
+$('#scrim').addEventListener('click', () => {
+  closeCardMenu();
+  closeSheets();
+});
 
 document.addEventListener('input', (e) => {
   const t = e.target as HTMLInputElement;
@@ -2236,7 +2376,10 @@ document.addEventListener('keydown', (e) => {
   }
   if (typing || mod || e.altKey) return;
   const onControl = t.matches('button, [role="button"], a, input');
-  if (e.key === 'Escape') return closeSheets();
+  if (e.key === 'Escape') {
+    if (menuFor) return closeCardMenu();
+    return closeSheets();
+  }
   if (e.code === 'Space' && !onControl) {
     e.preventDefault();
     return cut();

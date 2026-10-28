@@ -177,6 +177,26 @@ select.wm-input { padding-right: var(--space-2); cursor: pointer; }
 .drop { flex: none; width: 168px; min-height: 120px; border: 1px dashed var(--line-strong); border-radius: var(--radius-lg); display: flex; align-items: center; justify-content: center; text-align: center; padding: var(--space-2); color: var(--muted); font: 500 12px/16px var(--font-sans); }
 .strip.is-drop .drop { background: var(--accent-soft); border-color: var(--accent-line); color: var(--text); }
 
+/* ---------- card menu (long press / right click) ---------- */
+.wm-card { -webkit-touch-callout: none; user-select: none; -webkit-user-select: none; }
+.wm-card.is-held { box-shadow: var(--focus-ring); }
+.card-menu { position: fixed; z-index: 60; width: 360px; max-width: calc(100vw - 16px); display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-3); border-radius: var(--radius-md); background: var(--panel-2); border: 1px solid var(--line-2); box-shadow: var(--pop); }
+.card-menu__head { display: flex; align-items: center; gap: var(--space-2); }
+.card-menu__head b { flex: 1; min-width: 0; font: 700 16px/24px var(--font-sans); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card-menu__label { margin: 0; font: 500 12px/16px var(--font-sans); color: var(--muted); }
+.card-menu__grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--space-2); }
+.ovl-pick { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; min-height: 52px; padding: var(--space-1); border-radius: var(--radius-sm); border: 1px solid var(--line-2); background: var(--panel); color: var(--text); cursor: pointer; min-width: 0; }
+.ovl-pick b { font: 700 15px/20px var(--font-mono); }
+.ovl-pick span { font: 500 12px/16px var(--font-sans); color: var(--muted); max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ovl-pick:hover { background: var(--panel-3); border-color: var(--line-strong); }
+.ovl-pick:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.ovl-pick.is-on { border-color: var(--pgm); }
+.ovl-pick.is-mine { background: var(--accent-soft); border-color: var(--accent-line); }
+.ovl-pick.is-mine span { color: var(--accent-text); }
+.ovl-pick.is-mine.is-on { background: var(--pgm-soft); border-color: var(--pgm); }
+.ovl-pick.is-mine.is-on span { color: var(--pgm); }
+.card-menu__actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+
 /* ---------- toast & dialog ---------- */
 .toast-host { position: fixed; left: 50%; bottom: var(--space-6); transform: translateX(-50%); z-index: 50; max-width: calc(100vw - 2 * var(--space-4)); }
 .toast-host .wm-toast { max-width: 100%; }
@@ -236,6 +256,7 @@ select.wm-input { padding-right: var(--space-2); cursor: pointer; }
   .pl-item { min-height: var(--control-lg); }
   .ovl-btn, .preset__del { width: var(--control-lg); height: var(--control-lg); }
   .mon-btn, .lim-btn, .lufs__reset { min-height: var(--control-lg); }
+  .ovl-pick { min-height: 56px; }
   .wm-textarea { height: auto; }
   .wm-disclose { min-height: var(--control-lg); }
   .wm-slider { height: var(--control-lg); }
@@ -274,5 +295,10 @@ select.wm-input { padding-right: var(--space-2); cursor: pointer; }
   .toast-host { bottom: calc(64px + 60px + var(--space-3)); }
   .toast-host .wm-toast { width: calc(100vw - 2 * var(--space-4)); }
   .chooser { grid-template-columns: 1fr; }
+  .ovl-row { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); width: 100%; }
+  .ovl-row .tag { display: none; }
+  .ovl-row .ovl-btn { width: auto; }
+  .card-menu { left: 0 !important; right: 0; top: auto !important; bottom: 0; width: auto; max-width: none; border-radius: var(--radius-md) var(--radius-md) 0 0; padding-bottom: calc(var(--space-4) + env(safe-area-inset-bottom)); }
+  .menu-open .scrim { display: block; position: fixed; inset: 0; z-index: 55; background: var(--bg); opacity: .5; }
   .dest__on { margin-left: 0; min-height: var(--control-lg); }
 }
