@@ -7,8 +7,10 @@ body { overflow: hidden; }
 button, input { font: inherit; color: inherit; }
 [hidden] { display: none !important; }
 .grow { flex: 1; }
-.media-pool { position: fixed; left: 0; top: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; overflow: hidden; }
-.media-pool video, .media-pool audio { width: 1px; height: 1px; }
+/* players are painted onto canvases; kept a few pixels big and (almost) transparent so phones
+   do not treat them as invisible and throttle their frames */
+.media-pool { position: fixed; left: 0; top: 0; width: 16px; height: 9px; opacity: 0.01; pointer-events: none; overflow: hidden; z-index: -1; }
+.media-pool video, .media-pool audio { width: 16px; height: 9px; }
 .tag { font: 700 11px/14px var(--font-mono); letter-spacing: .06em; }
 .label { font: 600 13px/18px var(--font-sans); margin: 0; }
 .title { font: 700 16px/24px var(--font-sans); margin: 0; }

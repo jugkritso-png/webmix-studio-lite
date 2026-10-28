@@ -70,6 +70,34 @@ test.describe('desktop', () => {
     await expect(pgmName(page)).toHaveText('พื้นสี 1');
   });
 
+  test('card thumbnails are live and survive a cut', async ({ page }) => {
+    await page.goto('/');
+    await addTile(page, 'source', 'cam');
+    await addTile(page, 'source', 'bars');
+    const thumb = page.locator('#strip canvas[data-thumb]').first();
+    await expect(thumb).toHaveAttribute('width', '336');
+    // the fake camera moves every frame: count how many different thumbnails a second shows
+    const frames = await thumb.evaluate(async (cv: HTMLCanvasElement) => {
+      const seen = new Set<string>();
+      const end = performance.now() + 1000;
+      while (performance.now() < end) {
+        const d = cv.getContext('2d')!.getImageData(0, 0, cv.width, cv.height).data;
+        let h = 0;
+        for (let i = 0; i < d.length; i += 997) h = (h * 31 + d[i]) | 0;
+        seen.add(String(h));
+        await new Promise((r) => requestAnimationFrame(r));
+      }
+      return seen.size;
+    });
+    expect(frames).toBeGreaterThan(12);
+    // switching re-renders the strip but keeps the same canvas, so nothing flashes blank
+    await thumb.evaluate((cv) => { (cv as HTMLCanvasElement & { mark?: number }).mark = 1; });
+    await page.locator('#stage').click({ position: { x: 5, y: 5 } });
+    await page.keyboard.press('Space');
+    await expect(pgmName(page)).toHaveText('Color Bars');
+    expect(await page.locator('#strip canvas[data-thumb]').first().evaluate((cv) => (cv as HTMLCanvasElement & { mark?: number }).mark)).toBe(1);
+  });
+
   test('double-tap on a card cuts it to program', async ({ page }) => {
     await page.goto('/');
     await addTile(page, 'source', 'color');

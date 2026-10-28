@@ -969,16 +969,27 @@ function cardHtml(s: Source, i: number): string {
   return `
     <div class="wm-card ${isPgm ? 'is-pgm' : isPvw ? 'is-pvw' : ''} ${ui.selected === s.id ? 'is-selected' : ''}" role="button" tabindex="0" draggable="${!coarse()}"
       data-act="card" data-id="${s.id}" aria-haspopup="menu" aria-label="${i < 9 ? `${i + 1} ` : ''}${esc(s.name)}${word ? ` ${word}` : ''}">
-      <div class="wm-card__pic"><canvas data-thumb="${s.id}" width="192" height="108"></canvas>
+      <div class="wm-card__pic"><canvas data-thumb="${s.id}" width="${THUMB_W}" height="${THUMB_H}"></canvas>
         ${i < 9 ? `<span class="wm-card__num">${i + 1}</span>` : ''}${word ? `<span class="wm-card__tally">${word}</span>` : ''}</div>
       <div class="wm-card__foot"><div class="wm-card__name">${esc(s.name)}</div><div class="wm-card__sub">${esc(sub)}</div></div>
     </div>`;
 }
 
+// thumbnails at the card's real pixel size (sharp on phones), kept across re-renders so a cut never flashes them blank
+const THUMB_W = 336, THUMB_H = 189;
+const thumbs = new Map<string, HTMLCanvasElement>();
+
 function renderStrip(): void {
   const vis = cutSources();
   $('#strip').innerHTML = `${vis.map(cardHtml).join('')}
     <div class="drop">${vis.length ? `${coarse() ? 'กดค้างที่การ์ด' : 'คลิกขวาที่การ์ด'}เพื่อซ้อนบนจอหรือดูคำสั่งอื่น` : 'ยังไม่มีแหล่งภาพ แตะ + ในแกลเลอรีเพื่อเพิ่ม'}</div>`;
+  document.querySelectorAll<HTMLCanvasElement>('#strip canvas[data-thumb]').forEach((fresh) => {
+    const id = fresh.dataset.thumb!;
+    const kept = thumbs.get(id);
+    if (kept) fresh.replaceWith(kept);
+    else thumbs.set(id, fresh);
+  });
+  for (const id of thumbs.keys()) if (!byId(id)) thumbs.delete(id);
   lastThumb = 0;
 }
 
@@ -1923,9 +1934,10 @@ function frame(now: number): void {
   followAir();
   paintWindows(pgmCtx.canvas, pvwCtx.canvas, scene, now);
 
-  if (now - lastThumb > 200) {
+  // live thumbnails at ~30 fps (15 fps once there are many cards)
+  if (now - lastThumb > (thumbs.size > 8 ? 66 : 33)) {
     lastThumb = now;
-    document.querySelectorAll<HTMLCanvasElement>('canvas[data-thumb]').forEach((cv) => {
+    document.querySelectorAll<HTMLCanvasElement>('#strip canvas[data-thumb]').forEach((cv) => {
       const s = byId(cv.dataset.thumb!);
       const ctx = cv.getContext('2d');
       if (!s || !ctx) return;
