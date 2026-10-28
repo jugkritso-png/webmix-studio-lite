@@ -1,0 +1,22 @@
+<!-- @dsCard group="Gallery" height=200 -->
+<!doctype html>
+<html lang="th">
+<head><meta charset="utf-8"><title>AssetTile — preview</title></head>
+<body>
+<div class="wm-pad wm-row" style="align-items:flex-start;gap:var(--space-3)">
+  <div class="wm-tile wm-tile--new"><svg class="wm-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>เพิ่มกล้อง</div>
+  <div class="wm-tile is-selected"><div class="wm-tile__pic"><div class="wm-ph wm-ph--a"><i></i><i></i></div><span class="wm-tile__badge">USB</span><button class="wm-tile__add" aria-label="เพิ่ม"><svg class="wm-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></div><div class="wm-tile__name">กล้องหน้า</div></div>
+  <div class="wm-tile"><div class="wm-tile__pic"><div class="wm-ph wm-ph--b"><i></i><i></i></div><span class="wm-tile__badge">NDI</span><button class="wm-tile__add" aria-label="เพิ่ม"><svg class="wm-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></div><div class="wm-tile__name">STUDIO-PC (OBS)</div></div>
+  <div class="wm-tile"><div class="wm-tile__pic"><div class="wm-ph wm-ph--c"><i></i><i></i></div><span class="wm-tile__badge">MP4</span><button class="wm-tile__add" aria-label="เพิ่ม"><svg class="wm-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></div><div class="wm-tile__name">intro-2026.mp4</div></div>
+</div>
+<script>
+  document.querySelectorAll('[data-toggle]').forEach(function (g) {
+    g.addEventListener('click', function (e) {
+      var b = e.target.closest('button'); if (!b || !g.contains(b)) return;
+      var attr = g.getAttribute('data-toggle');
+      g.querySelectorAll('button').forEach(function (x) { x.setAttribute(attr, x === b ? 'true' : 'false'); });
+    });
+  });
+</script>
+</body>
+</html>

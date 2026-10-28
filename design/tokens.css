@@ -1,0 +1,67 @@
+/* WebMix Design System — generated from tokens.json */
+:root, [data-theme="dark"] {
+  --bg: #090b0f;
+  --panel: #11141a;
+  --panel-2: #171b23;
+  --panel-3: #1e232d;
+  --well: #07090c;
+  --card-ground: #05070a;
+  --line: #242a35;
+  --line-2: #2f3644;
+  --line-strong: #4a5366;
+  --text: #e7eaf0;
+  --muted: #8b94a7;
+  --dim: #5d6578;
+  --dim-aa: #7d8699;
+  --pgm: #ef4444;
+  --pgm-glow: rgba(239,68,68,.35);
+  --pgm-fill: #dc2626;
+  --pgm-soft: #2a1215;
+  --pvw: #22c55e;
+  --pvw-glow: rgba(34,197,94,.28);
+  --pvw-fill: #15803d;
+  --pvw-soft: #0f2a1a;
+  --amber: #f5a524;
+  --amber-soft: #2a2010;
+  --on-amber: #0b0d12;
+  --blue: #3b82f6;
+  --accent: #2f6fe8;
+  --accent-line: #4f86f0;
+  --accent-text: #7fa6ff;
+  --accent-soft: #1b2a4a;
+  --on-accent: #ffffff;
+  --glow-pgm: 0 0 0 2px #ef4444, 0 0 28px rgba(239,68,68,.35);
+  --glow-pvw: 0 0 0 2px #22c55e, 0 0 26px rgba(34,197,94,.28);
+  --focus-ring: 0 0 0 2px #090b0f, 0 0 0 4px #4f86f0;
+  --pop: 0 12px 32px rgba(0,0,0,.55);
+}
+:root {
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 12px;
+  --radius-pill: 999px;
+  --control-sm: 28px;
+  --control-md: 34px;
+  --control-lg: 44px;
+  --control-key: 54px;
+  --rail-width: 72px;
+  --inspector-width: 300px;
+  --font-sans: "Inter", "IBM Plex Sans Thai", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.display { font-family: var(--font-sans); font-size: 28px; line-height: 34px; font-weight: 700; letter-spacing: -0.01em; }
+.title { font-family: var(--font-sans); font-size: 16px; line-height: 24px; font-weight: 700; }
+.body { font-family: var(--font-sans); font-size: 14px; line-height: 22px; font-weight: 400; }
+.label { font-family: var(--font-sans); font-size: 13px; line-height: 18px; font-weight: 600; }
+.caption { font-family: var(--font-sans); font-size: 12px; line-height: 16px; font-weight: 500; }
+.key { font-family: var(--font-sans); font-size: 15px; line-height: 20px; font-weight: 800; letter-spacing: 0.12em; }
+.timecode { font-family: var(--font-mono); font-size: 13px; line-height: 18px; font-weight: 700; }
+.tag { font-family: var(--font-mono); font-size: 11px; line-height: 14px; font-weight: 700; letter-spacing: 0.06em; }

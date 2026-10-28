@@ -1,0 +1,19 @@
+<!-- @dsCard group="Switching" height=120 -->
+<!doctype html>
+<html lang="th">
+<head><meta charset="utf-8"><title>TransitionKeys — preview</title></head>
+<body>
+<div class="wm-pad wm-row" style="gap:var(--space-4)">
+  <div class="wm-keys"><button class="wm-key wm-key--cut">CUT<small>SPACE</small></button><button class="wm-key wm-key--auto">AUTO<small>MIX 0.5s · ENTER</small></button></div>
+</div>
+<script>
+  document.querySelectorAll('[data-toggle]').forEach(function (g) {
+    g.addEventListener('click', function (e) {
+      var b = e.target.closest('button'); if (!b || !g.contains(b)) return;
+      var attr = g.getAttribute('data-toggle');
+      g.querySelectorAll('button').forEach(function (x) { x.setAttribute(attr, x === b ? 'true' : 'false'); });
+    });
+  });
+</script>
+</body>
+</html>

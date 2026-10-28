@@ -1,0 +1,31 @@
+<!-- @dsCard group="Actions" height=150 -->
+<!doctype html>
+<html lang="th">
+<head><meta charset="utf-8"><title>Button — preview</title></head>
+<body>
+<div class="wm-pad wm-col">
+  <div class="wm-row">
+    <button class="wm-btn wm-btn--primary"><svg class="wm-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>เพิ่มแหล่งภาพ</button>
+    <button class="wm-btn">นำเข้าฉาก</button>
+    <button class="wm-btn wm-btn--ghost">ยกเลิก</button>
+    <button class="wm-btn" disabled>บันทึกแล้ว</button>
+  </div>
+  <div class="wm-row">
+    <button class="wm-btn wm-btn--live wm-btn--lg"><span class="wm-dot"></span>กำลังไลฟ์ · 01:24:07</button>
+    <button class="wm-btn wm-btn--sm"><svg class="wm-ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"/></svg>บันทึก</button>
+    <button class="wm-btn wm-btn--icon wm-btn--ghost" aria-label="ย้อนกลับ" title="ย้อนกลับ ⌘Z"><svg class="wm-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7L4 12l5 5"/><path d="M4 12h11a5 5 0 0 1 0 10h-2"/></svg></button>
+    <button class="wm-btn wm-btn--icon wm-btn--ghost" aria-label="ทำซ้ำ" title="ทำซ้ำ ⇧⌘Z"><svg class="wm-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 7l5 5-5 5"/><path d="M20 12H9a5 5 0 0 0 0 10h2"/></svg></button>
+    <span class="wm-note">ปุ่มไอคอนมีคำอธิบาย + คีย์ลัดใน tooltip</span>
+  </div>
+</div>
+<script>
+  document.querySelectorAll('[data-toggle]').forEach(function (g) {
+    g.addEventListener('click', function (e) {
+      var b = e.target.closest('button'); if (!b || !g.contains(b)) return;
+      var attr = g.getAttribute('data-toggle');
+      g.querySelectorAll('button').forEach(function (x) { x.setAttribute(attr, x === b ? 'true' : 'false'); });
+    });
+  });
+</script>
+</body>
+</html>

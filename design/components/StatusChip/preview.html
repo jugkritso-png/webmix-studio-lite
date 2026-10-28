@@ -1,0 +1,20 @@
+<!-- @dsCard group="Feedback" height=110 -->
+<!doctype html>
+<html lang="th">
+<head><meta charset="utf-8"><title>StatusChip — preview</title></head>
+<body>
+<div class="wm-pad wm-col">
+  <div class="wm-row"><span class="wm-chip wm-chip--live"><span class="wm-dot"></span>LIVE <b>01:24:07</b></span><span class="wm-chip wm-chip--ok"><span class="wm-dot"></span>YouTube เชื่อมต่อแล้ว</span><span class="wm-chip wm-chip--warn">เน็ตช้า <b>2.1 Mbps</b></span><span class="wm-chip wm-chip--info">อัปเดตใหม่ 1.1.14</span></div>
+  <div class="wm-row" data-toggle="aria-pressed"><button class="wm-chip wm-chip--filter" aria-pressed="true">ทั้งหมด</button><button class="wm-chip wm-chip--filter" aria-pressed="false">กล้อง</button><button class="wm-chip wm-chip--filter" aria-pressed="false">NDI</button><button class="wm-chip wm-chip--filter" aria-pressed="false">ไฟล์</button></div>
+</div>
+<script>
+  document.querySelectorAll('[data-toggle]').forEach(function (g) {
+    g.addEventListener('click', function (e) {
+      var b = e.target.closest('button'); if (!b || !g.contains(b)) return;
+      var attr = g.getAttribute('data-toggle');
+      g.querySelectorAll('button').forEach(function (x) { x.setAttribute(attr, x === b ? 'true' : 'false'); });
+    });
+  });
+</script>
+</body>
+</html>

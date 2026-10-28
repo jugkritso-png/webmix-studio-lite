@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="description" content="WebMix Studio Lite — สวิตเชอร์ไลฟ์บนเบราว์เซอร์">
+  <link rel="icon" type="image/svg+xml" href="./design/assets/Logos/webmix-mark.svg">
+  <title>WebMix Studio Lite</title>
+</head>
+<body>
+  <div class="app" id="app">
+    <header class="top" id="top"></header>
+    <nav class="wm-rail rail" id="rail" aria-label="หมวด"></nav>
+    <section class="gallery" id="gallery" aria-label="แกลเลอรี"></section>
+    <main class="stage" id="stage">
+      <div class="mons">
+        <figure class="mon">
+          <div class="wm-mon is-pvw" id="mon-pvw" data-drop="pvw">
+            <canvas id="cv-pvw" width="640" height="360" aria-label="จอพรีวิว (PVW)"></canvas>
+            <span class="wm-mon__tag">PVW</span>
+          </div>
+          <figcaption class="mon__cap" id="cap-pvw"></figcaption>
+        </figure>
+        <figure class="mon">
+          <div class="wm-mon is-pgm" id="mon-pgm" data-drop="pgm">
+            <canvas id="cv-pgm" width="1280" height="720" aria-label="จอออกอากาศ (PGM)"></canvas>
+            <span class="wm-mon__tag">PGM</span>
+          </div>
+          <figcaption class="mon__cap" id="cap-pgm"></figcaption>
+        </figure>
+      </div>
+      <div class="trans" id="trans"></div>
+    </main>
+    <aside class="wm-insp insp" id="insp" aria-label="ปรับค่า"></aside>
+    <footer class="strip" id="strip" data-drop="strip" aria-label="แหล่งภาพ"></footer>
+  </div>
+  <div class="scrim" id="scrim"></div>
+  <div class="toast-host" id="toasts" aria-live="polite"></div>
+  <dialog class="dlg" id="dlg"></dialog>
+  <script type="module" src="./src/main.ts"></script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+<!-- @dsCard group="Controls" height=110 -->
+<!doctype html>
+<html lang="th">
+<head><meta charset="utf-8"><title>SegmentedControl — preview</title></head>
+<body>
+<div class="wm-pad wm-col">
+  <div class="wm-seg" data-toggle="aria-pressed"><button aria-pressed="true">MIX</button><button aria-pressed="false">WIPE</button><button aria-pressed="false">STINGER</button></div>
+  <div class="wm-seg" data-toggle="aria-pressed"><button aria-pressed="false">16:9</button><button aria-pressed="true">9:16</button></div>
+</div>
+<script>
+  document.querySelectorAll('[data-toggle]').forEach(function (g) {
+    g.addEventListener('click', function (e) {
+      var b = e.target.closest('button'); if (!b || !g.contains(b)) return;
+      var attr = g.getAttribute('data-toggle');
+      g.querySelectorAll('button').forEach(function (x) { x.setAttribute(attr, x === b ? 'true' : 'false'); });
+    });
+  });
+</script>
+</body>
+</html>

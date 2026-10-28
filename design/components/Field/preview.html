@@ -1,0 +1,22 @@
+<!-- @dsCard group="Controls" height=230 -->
+<!doctype html>
+<html lang="th">
+<head><meta charset="utf-8"><title>Field — preview</title></head>
+<body>
+<div class="wm-pad wm-col" style="max-width:340px">
+  <label class="wm-field"><span>ชื่อแหล่งภาพ</span><input class="wm-input" value="กล้องหลัก"></label>
+  <label class="wm-field"><span>เซิร์ฟเวอร์ปลายทาง</span><input class="wm-input" placeholder="rtmp://live.example.com/app"><small class="wm-help wm-help--err">ใส่ URL ที่ขึ้นต้นด้วย rtmp:// หรือ srt://</small></label>
+  <div class="wm-field"><span>ความโปร่งใส</span><div class="wm-range"><div class="wm-range__track"><div class="wm-range__fill" style="width:72%"></div><div class="wm-range__knob" style="left:72%"></div></div><span class="wm-range__val">72%</span></div></div>
+  <div class="wm-insp__row"><span>ลบพื้นหลังด้วย AI</span><span class="wm-toggle is-on" role="switch" aria-checked="true"></span></div>
+</div>
+<script>
+  document.querySelectorAll('[data-toggle]').forEach(function (g) {
+    g.addEventListener('click', function (e) {
+      var b = e.target.closest('button'); if (!b || !g.contains(b)) return;
+      var attr = g.getAttribute('data-toggle');
+      g.querySelectorAll('button').forEach(function (x) { x.setAttribute(attr, x === b ? 'true' : 'false'); });
+    });
+  });
+</script>
+</body>
+</html>

@@ -1,0 +1,20 @@
+<!-- @dsCard group="Feedback" height=120 -->
+<!doctype html>
+<html lang="th">
+<head><meta charset="utf-8"><title>Toast — preview</title></head>
+<body>
+<div class="wm-pad wm-col">
+  <div class="wm-toast" role="status"><span class="wm-toast__msg">ลบ "กล้อง 2" แล้ว</span><button class="wm-btn wm-btn--ghost">ย้อนกลับ</button></div>
+  <div class="wm-toast" role="status"><span class="wm-chip wm-chip--ok"><span class="wm-dot"></span>เชื่อมต่อแล้ว</span><span class="wm-toast__msg">กลับมาไลฟ์ต่อใน 5 วินาที</span></div>
+</div>
+<script>
+  document.querySelectorAll('[data-toggle]').forEach(function (g) {
+    g.addEventListener('click', function (e) {
+      var b = e.target.closest('button'); if (!b || !g.contains(b)) return;
+      var attr = g.getAttribute('data-toggle');
+      g.querySelectorAll('button').forEach(function (x) { x.setAttribute(attr, x === b ? 'true' : 'false'); });
+    });
+  });
+</script>
+</body>
+</html>

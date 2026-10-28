@@ -1,0 +1,89 @@
+<!-- @dsCard group="Layout" height=820 width=1440 page -->
+<!doctype html>
+<html lang="th">
+<head><meta charset="utf-8"><title>AppShell — preview</title><style>
+  .shell { display:grid; grid-template-columns: var(--rail-width) 300px 1fr var(--inspector-width); grid-template-rows: 52px 1fr auto; height: 820px; }
+  .top { grid-column: 1 / -1; display:flex; align-items:center; gap: var(--space-2); padding: 0 var(--space-4); background: var(--panel); border-bottom: 1px solid var(--line); }
+  .brand { display:flex; align-items:center; gap: var(--space-2); margin-right: var(--space-4); }
+  .brand b { font: 700 16px/24px var(--font-sans); }
+  .m-red { fill: var(--pgm); } .m-ink { fill: var(--bg); }
+  .grow { flex: 1; }
+  .shell > .wm-rail { grid-row: 2 / 4; }
+  .gallery { grid-row: 2 / 3; background: var(--panel); border-right: 1px solid var(--line); padding: var(--space-4); display:flex; flex-direction:column; gap: var(--space-3); overflow:hidden; }
+  .g-head { display:flex; flex-direction:column; gap: var(--space-3); }
+  .g-head .title { font: 700 16px/24px var(--font-sans); }
+  .search { display:flex; align-items:center; gap: var(--space-2); height: var(--control-md); padding: 0 var(--space-3); border-radius: var(--radius-sm); background: var(--well); border: 1px solid var(--line-2); color: var(--dim-aa); font-size: 13px; }
+  .grid { display:grid; grid-template-columns: 1fr 1fr; gap: var(--space-2); }
+  .grid .wm-tile { width:auto; }
+  .stage { grid-row: 2 / 3; padding: var(--space-4); display:flex; flex-direction:column; gap: var(--space-4); min-width:0; }
+  .mons { display:grid; grid-template-columns: 1fr 1fr; gap: var(--space-4); }
+  .trans { display:flex; align-items:center; justify-content:center; gap: var(--space-4); }
+  .shell > .wm-insp { grid-row: 2 / 4; }
+  .strip { grid-column: 2 / 4; grid-row: 3; display:flex; gap: var(--space-3); padding: var(--space-3) var(--space-4); background: var(--panel); border-top: 1px solid var(--line); overflow:hidden; }
+  .strip .wm-card { width: 150px; flex:none; }
+  .drop { flex:none; width:150px; border:1px dashed var(--line-strong); border-radius: var(--radius-lg); display:flex; align-items:center; justify-content:center; text-align:center; padding: var(--space-2); color: var(--muted); font: 500 12px/16px var(--font-sans); }
+</style></head>
+<body>
+<div class="shell">
+  <header class="top">
+    <div class="brand"><svg width="22" height="22" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" class="m-red"/><circle cx="16" cy="16" r="6" class="m-ink"/></svg><b>WebMix</b><span class="wm-note">งานสัมมนา ต.ค.</span></div>
+    <div class="wm-row"><button class="wm-btn wm-btn--icon wm-btn--ghost" aria-label="ย้อนกลับ" title="ย้อนกลับ ⌘Z"><svg class="wm-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 7L4 12l5 5"/><path d="M4 12h11a5 5 0 0 1 0 10h-2"/></svg></button><button class="wm-btn wm-btn--icon wm-btn--ghost" aria-label="ทำซ้ำ" title="ทำซ้ำ ⇧⌘Z"><svg class="wm-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 7l5 5-5 5"/><path d="M20 12H9a5 5 0 0 0 0 10h2"/></svg></button></div>
+    <div class="grow"></div>
+    <span class="wm-chip wm-chip--ok"><span class="wm-dot"></span>2 ปลายทาง</span>
+    <span class="wm-chip">CPU <b>38%</b></span>
+    <button class="wm-btn wm-btn--icon wm-btn--ghost" aria-label="ตั้งค่า"><svg class="wm-ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg></button>
+    <button class="wm-btn"><svg class="wm-ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7"/></svg>บันทึก</button>
+    <button class="wm-btn wm-btn--live"><span class="wm-dot"></span>LIVE 01:24:07</button>
+  </header>
+  <nav class="wm-rail" data-toggle="aria-current"><button aria-current="true"><svg class="wm-ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="M16 10l5-3v10l-5-3"/></svg>แหล่งภาพ</button><button aria-current="false"><svg class="wm-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4M8 7v10M12 4v16M16 8v8M20 11v2"/></svg>เสียง</button><button aria-current="false"><svg class="wm-ic" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 15h18M7 18h6"/></svg>กราฟิก</button><button aria-current="false"><svg class="wm-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6V4h14v2M12 4v16M9 20h6"/></svg>ข้อความ</button><button aria-current="false"><svg class="wm-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H9l-5 4z"/></svg>คอมเมนต์</button><button aria-current="false"><svg class="wm-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l2.2 5.8L20 11l-5.8 2.2L12 19l-2.2-5.8L4 11l5.8-2.2z"/></svg>เอฟเฟกต์</button><button aria-current="false"><svg class="wm-ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M6.3 6.3a8 8 0 0 0 0 11.4M17.7 6.3a8 8 0 0 1 0 11.4"/></svg>ไลฟ์</button></nav>
+  <section class="gallery">
+    <div class="g-head"><span class="title">แหล่งภาพ</span><div class="search"><svg class="wm-ic" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4.5-4.5"/></svg><span>ค้นหากล้อง, NDI, ไฟล์</span></div></div>
+    <div class="wm-row" data-toggle="aria-pressed"><button class="wm-chip wm-chip--filter" aria-pressed="true">ทั้งหมด</button><button class="wm-chip wm-chip--filter" aria-pressed="false">กล้อง</button><button class="wm-chip wm-chip--filter" aria-pressed="false">NDI</button><button class="wm-chip wm-chip--filter" aria-pressed="false">ไฟล์</button></div>
+    <div class="grid">
+      <div class="wm-tile wm-tile--new"><svg class="wm-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>เพิ่มกล้อง</div>
+      <div class="wm-tile"><div class="wm-tile__pic"><div class="wm-ph wm-ph--a"><i></i><i></i></div><span class="wm-tile__badge">USB</span><button class="wm-tile__add" aria-label="เพิ่ม"><svg class="wm-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></div><div class="wm-tile__name">กล้องหน้า</div></div>
+      <div class="wm-tile"><div class="wm-tile__pic"><div class="wm-ph wm-ph--b"><i></i><i></i></div><span class="wm-tile__badge">NDI</span><button class="wm-tile__add" aria-label="เพิ่ม"><svg class="wm-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></div><div class="wm-tile__name">STUDIO-PC</div></div>
+      <div class="wm-tile"><div class="wm-tile__pic"><div class="wm-ph wm-ph--c"><i></i><i></i></div><span class="wm-tile__badge">MP4</span><button class="wm-tile__add" aria-label="เพิ่ม"><svg class="wm-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></div><div class="wm-tile__name">intro.mp4</div></div>
+      <div class="wm-tile"><div class="wm-tile__pic"><div class="wm-ph wm-ph--a"><i></i><i></i></div><span class="wm-tile__badge">SRT</span><button class="wm-tile__add" aria-label="เพิ่ม"><svg class="wm-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button></div><div class="wm-tile__name">มือถือ (SRT)</div></div>
+    </div>
+  </section>
+  <main class="stage">
+    <div class="mons">
+      <div class="wm-mon is-pvw"><div class="wm-ph wm-ph--b"><i></i><i></i></div><span class="wm-mon__tag">PVW</span></div>
+      <div class="wm-mon is-pgm"><div class="wm-ph wm-ph--a"><i></i><i></i></div><span class="wm-mon__tag">PGM</span></div>
+    </div>
+    <div class="trans">
+      <div class="wm-seg" data-toggle="aria-pressed"><button aria-pressed="true">MIX</button><button aria-pressed="false">WIPE</button><button aria-pressed="false">STINGER</button></div>
+      <div class="wm-keys"><button class="wm-key wm-key--cut">CUT<small>SPACE</small></button><button class="wm-key wm-key--auto">AUTO<small>0.5s · ENTER</small></button></div>
+    </div>
+  </main>
+  <aside class="wm-insp">
+  <div class="wm-insp__head"><span class="wm-insp__title">กล้องหลัก</span><span class="wm-chip wm-chip--live"><span class="wm-dot"></span>PGM</span></div>
+  <div class="wm-tabs" role="tablist" data-toggle="aria-selected"><button role="tab" aria-selected="true">ภาพ</button><button role="tab" aria-selected="false">เสียง</button><button role="tab" aria-selected="false">สี</button><button role="tab" aria-selected="false">AI</button></div>
+  <div class="wm-insp__body">
+    <div class="wm-field"><span>ขนาด</span><div class="wm-range"><div class="wm-range__track"><div class="wm-range__fill" style="width:100%"></div><div class="wm-range__knob" style="left:100%"></div></div><span class="wm-range__val">100%</span></div></div>
+    <div class="wm-field"><span>ความโปร่งใส</span><div class="wm-range"><div class="wm-range__track"><div class="wm-range__fill" style="width:72%"></div><div class="wm-range__knob" style="left:72%"></div></div><span class="wm-range__val">72%</span></div></div>
+    <div class="wm-insp__row"><span>กลับด้านภาพ</span><span class="wm-toggle" role="switch" aria-checked="false"></span></div>
+    <div class="wm-insp__row"><span>ลบพื้นหลังด้วย AI</span><span class="wm-toggle is-on" role="switch" aria-checked="true"></span></div>
+    <button class="wm-disclose">ตั้งค่าขั้นสูง<svg class="wm-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>
+  </div>
+</aside>
+  <footer class="strip">
+    <div class="wm-card is-pgm"><div class="wm-card__pic"><div class="wm-ph wm-ph--a"><i></i><i></i></div><span class="wm-card__num">1</span><span class="wm-card__tally">PGM</span></div><div class="wm-card__foot"><div class="wm-card__name">กล้องหลัก</div><div class="wm-card__sub">1080p · 30 fps</div></div></div>
+    <div class="wm-card is-pvw"><div class="wm-card__pic"><div class="wm-ph wm-ph--b"><i></i><i></i></div><span class="wm-card__num">2</span><span class="wm-card__tally">PVW</span></div><div class="wm-card__foot"><div class="wm-card__name">แชร์หน้าจอ</div><div class="wm-card__sub">1920×1080</div></div></div>
+    <div class="wm-card"><div class="wm-card__pic"><div class="wm-ph wm-ph--c"><i></i><i></i></div><span class="wm-card__num">3</span></div><div class="wm-card__foot"><div class="wm-card__name">กราฟิกชื่อผู้พูด</div><div class="wm-card__sub">Lower third</div></div></div>
+    <div class="wm-card"><div class="wm-card__pic"><div class="wm-ph wm-ph--b"><i></i><i></i></div><span class="wm-card__num">4</span></div><div class="wm-card__foot"><div class="wm-card__name">STUDIO-PC</div><div class="wm-card__sub">NDI</div></div></div>
+    <div class="drop">ลากจากแกลเลอรีมาวางที่นี่</div>
+  </footer>
+</div>
+<script>
+  document.querySelectorAll('[data-toggle]').forEach(function (g) {
+    g.addEventListener('click', function (e) {
+      var b = e.target.closest('button'); if (!b || !g.contains(b)) return;
+      var attr = g.getAttribute('data-toggle');
+      g.querySelectorAll('button').forEach(function (x) { x.setAttribute(attr, x === b ? 'true' : 'false'); });
+    });
+  });
+</script>
+</body>
+</html>

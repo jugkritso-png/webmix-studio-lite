@@ -1,0 +1,21 @@
+<!-- @dsCard group="Switching" height=170 -->
+<!doctype html>
+<html lang="th">
+<head><meta charset="utf-8"><title>SourceCard — preview</title></head>
+<body>
+<div class="wm-pad wm-row" style="gap:var(--space-4)">
+  <div class="wm-card is-pgm"><div class="wm-card__pic"><div class="wm-ph wm-ph--a"><i></i><i></i></div><span class="wm-card__num">1</span><span class="wm-card__tally">PGM</span></div><div class="wm-card__foot"><div class="wm-card__name">กล้องหลัก</div><div class="wm-card__sub">1080p · 30 fps</div></div></div>
+  <div class="wm-card is-pvw"><div class="wm-card__pic"><div class="wm-ph wm-ph--b"><i></i><i></i></div><span class="wm-card__num">2</span><span class="wm-card__tally">PVW</span></div><div class="wm-card__foot"><div class="wm-card__name">แชร์หน้าจอ</div><div class="wm-card__sub">1920×1080</div></div></div>
+  <div class="wm-card"><div class="wm-card__pic"><div class="wm-ph wm-ph--c"><i></i><i></i></div><span class="wm-card__num">3</span></div><div class="wm-card__foot"><div class="wm-card__name">กราฟิกชื่อผู้พูด</div><div class="wm-card__sub">NDI · STUDIO-PC</div></div></div>
+</div>
+<script>
+  document.querySelectorAll('[data-toggle]').forEach(function (g) {
+    g.addEventListener('click', function (e) {
+      var b = e.target.closest('button'); if (!b || !g.contains(b)) return;
+      var attr = g.getAttribute('data-toggle');
+      g.querySelectorAll('button').forEach(function (x) { x.setAttribute(attr, x === b ? 'true' : 'false'); });
+    });
+  });
+</script>
+</body>
+</html>

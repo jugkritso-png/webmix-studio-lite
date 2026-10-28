@@ -1,0 +1,19 @@
+{
+  "name": "webmix-studio-lite",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "WebMix Studio Lite — สวิตเชอร์ไลฟ์บนเบราว์เซอร์ ตาม WebMix Design System",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "check:tokens": "node scripts/check-tokens.mjs",
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "typescript": "5.9.3",
+    "vite": "7.1.12"
+  }
+}
